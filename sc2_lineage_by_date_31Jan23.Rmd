@@ -1,0 +1,207 @@
+---
+title: "Outbreak.info lineage call based on Date and Location"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(outbreakinfo) #devtools::install_github("outbreak-info/R-outbreak-info")
+library(tidyverse)
+library(purrr)
+library(stringr)
+library(readxl)
+library(lubridate)
+knitr::opts_chunk$set(echo = FALSE)
+
+#Provide GISAID credentials using 
+authenticateUser() #vivhogan #hint: 09 22
+```
+```{r}
+# Get the prevalence of all circulating lineages in states by date
+# Check Console for prompts when retrieving data
+# Add any new locations here:
+arizona = getAllLineagesByLocation(location = "Arizona", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Arizona")
+alabama = getAllLineagesByLocation(location = "Alabama", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Alabama")
+california = getAllLineagesByLocation(location = "California", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "California")
+colorado = getAllLineagesByLocation(location = "Colorado", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Colorado")
+florida = getAllLineagesByLocation(location = "Florida", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Florida")
+georgia = getAllLineagesByLocation(location = "Georgia", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Georgia")
+idaho = getAllLineagesByLocation(location = "Idaho", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Idaho")
+illinois = getAllLineagesByLocation(location = "Illinois", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Illinois")
+kansas = getAllLineagesByLocation(location = "Kansas", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Kansas")
+louisiana = getAllLineagesByLocation(location = "Louisiana", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Louisiana")
+mississippi = getAllLineagesByLocation(location = "Mississippi", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Mississippi")
+missouri = getAllLineagesByLocation(location = "Missouri", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Missouri")
+montana = getAllLineagesByLocation(location = "Montana", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Montana")
+nebraska = getAllLineagesByLocation(location = "Nebraska", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Nebraska")
+newmexico = getAllLineagesByLocation(location = "New Mexico", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "New Mexico")
+northcarolina = getAllLineagesByLocation(location = "North Carolina", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "North Carolina")
+northdakota = getAllLineagesByLocation(location = "North Dakota", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "North Dakota")
+ohio = getAllLineagesByLocation(location = "Ohio", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Ohio")
+oklahoma = getAllLineagesByLocation(location = "Oklahoma", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Oklahoma")
+southdakota = getAllLineagesByLocation(location = "South Dakota", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "South Dakota")
+texas = getAllLineagesByLocation(location = "Texas", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Texas")
+utah = getAllLineagesByLocation(location = "Utah", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Utah")
+wyoming = getAllLineagesByLocation(location = "Wyoming", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "Wyoming")
+unitedstates = getAllLineagesByLocation(location = "United States", ndays = 1500, other_threshold = 0.005) %>%
+  mutate(state = "all")
+```
+```{r}
+
+#one table for all states
+lineages <- alabama %>%
+  bind_rows(arizona) %>%
+  bind_rows(california) %>%
+  bind_rows(colorado) %>%
+  bind_rows(florida) %>%
+  bind_rows(georgia) %>%
+  bind_rows(idaho) %>%
+  bind_rows(illinois) %>%
+  bind_rows(kansas) %>%
+  bind_rows(louisiana) %>%
+  bind_rows(mississippi) %>%
+  bind_rows(missouri) %>%
+  bind_rows(montana) %>%
+  bind_rows(nebraska) %>%
+  bind_rows(newmexico) %>%
+  bind_rows(northcarolina) %>%
+  bind_rows(northdakota) %>%
+  bind_rows(ohio) %>%
+  bind_rows(oklahoma) %>%
+  bind_rows(southdakota) %>%
+  bind_rows(texas) %>%
+  bind_rows(utah) %>%
+  bind_rows(wyoming) %>%
+  bind_rows(unitedstates)
+
+#group ay lineages
+  ay_lineages <- lineages %>%
+    filter(startsWith(lineage, "ay")) %>%
+    group_by(state, date) %>%
+    summarize(prevalence = sum(prevalence), prevalence_rolling = sum(prevalence_rolling)) %>%
+    mutate(lineage = "ay_all")
+  
+#group b.1 lineages
+    b1_lineages <- lineages %>%
+    filter(startsWith(lineage, "b.1")) %>%
+    group_by(state, date) %>%
+    summarize(prevalence = sum(prevalence), prevalence_rolling = sum(prevalence_rolling)) %>%
+    mutate(lineage = "b.1_all")
+
+#add ay_all (group) to lineage df  
+  lineages <- lineages %>%
+    bind_rows(ay_lineages) %>%
+    bind_rows(b1_lineages)
+
+
+```
+```{r}
+#load data
+deanna_data <- read_excel(path = "/Users/vhogan/Documents/EPICC/Reinfects/collection_dates_unknowns.xlsx") %>%
+  mutate(Collection_date = as.character(Collection_date))
+
+```
+
+```{r}
+#function to create/empty output df
+clear_output <- function(){
+  result <<- data.frame(SampleID = character(),
+                        date = as.Date(character(), origin = lubridate::origin),
+                        state = character(),
+                        lineage1 = character(),
+                        prevalence1 = double(),
+                        prevalence_rolling1 = double(),
+                        lineage2 = character(),
+                        prevalence2 = double(),
+                        prevalence_rolling2 = double(),
+                        lineage3 = character(),
+                        prevalence3 = double(),
+                        prevalence_rolling3 = double(),
+                        note = character())
+}
+```
+
+```{r}
+#Define function with input from Deanna data of Date, state, and ID. Select entries from table with matching date and state and select max prevalence_rolling
+#Add highest prevalence lineage to result table when result is non-zero prevalence and not lineage of 'other'
+
+#When no data from given state, use all states us_lineages and add to result table with indication "Prevalence from all states"
+date_function <- function(Date, State, ID, messages=FALSE){
+  #select data for state and date
+  lineage <- lineages %>%
+    filter(date == Date) %>%
+    filter(state == State) %>% 
+    #slice_max(prevalence_rolling) #select highest prev. rolling
+    arrange(desc(prevalence_rolling)) %>%
+    top_n(3, prevalence_rolling) #select top 3 prev.rolling
+
+  #add result from most prevalent lineage at day and state (except when no data, or lineage call of other)
+  if(lineage[1,6] > 0 & lineage[1,4] != "other"){
+    result[nrow(result) + 1,] <<- c(ID, Date, State, lineage[1,4], lineage[1,5], lineage[1,6], #top result
+                                    lineage[2,4], lineage[2,5], lineage[2,6],                  #2nd result
+                                    lineage[3,4], lineage[3,5], lineage[3,6], "")              #3rd result
+  } else { #Use data from all states when there is no data for provided states or "other"
+    lineage <- lineages %>%
+    filter(date == Date) %>%
+    filter(state == "all") %>% 
+    arrange(desc(prevalence_rolling)) %>%
+    top_n(3, prevalence_rolling)
+    
+    result[nrow(result) + 1,] <<- c(ID, Date, State, lineage[1,4], lineage[1,5], lineage[1,6],
+                                    lineage[2,4], lineage[2,5], lineage[2,6],
+                                    lineage[3,4], lineage[3,5], lineage[3,6], "Prevalence from all states")
+  }
+  
+result
+}
+```
+```{r}
+#run single specimen with manual input
+clear_output()
+date_function("2020-12-01", "Missouri", "ID1")
+```
+```{r}
+#clear previous output
+clear_output()
+
+#run through each row in datafrom Deanna
+mult_function <- function(){
+  for(i in 1:nrow(deanna_data)) {
+    #go through each row in data
+    row <- deanna_data[i,] 
+    print(paste(i, ": ", row$pat_id)) #show number of iterations and Sample ID (to show user that function is running)
+    date_function(row$Collection_date, row$State, row$pat_id) #run through lineage by date function
+  }
+  print(result) #print final dataframe
+  write.csv(result, "lineagecall_unknowns.csv") #export final dataframe
+}
+
+mult_function()
+```
+
+
+

@@ -1,0 +1,152 @@
+---
+title: "Flu/SC2 & N1/N2 assay Ct Comparison"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+<br>
+
+##### <span style="color: gray;">For the most part N1 and N2 Cts are quite comparable to the Ct values obtained in the Flu/Sc2 assay. Important exceptions (from a total of 176 specimens): </span>
+<br>
+
+##### <span style="color: gray;">Specimens can have a high Ct on one assay and be negative/inconclusive on the other </span>
+##### <span style="color: gray;">Two specimens became positive on the N1/N2 assay with Cts around 30 after being negative on Flu/Sc2. </span>
+##### <span style="color: blue;">Check how baseline determination effects these results - Does not seem to effect discrepancies. Auto baseline seems reasonable on Flu/Sc2 assay. But shape of some curves under threshold is weird.</span>
+<br>
+
+```{r setup, include=FALSE}
+
+#LOAD  LIBRARIES
+library(knitr)
+library(tidyverse)
+library(dplyr)  
+library(readr)
+library(viridis)
+library(plotly)
+library(ggplot2)
+library(ggpubr)
+library(readxl)
+library(purrr)
+library(DT)
+library(RColorBrewer)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#import data
+data26 <- read_excel(path = "/Users/vivian/EPICC/FluSc2_Comp/20220801_wk26_N1_N2_comparison.xlsx", sheet = "Sheet8")%>%
+  mutate(week = "Week 26") %>%
+  mutate(SC2 = Sc2) %>%
+  select(-Sc2)
+
+
+data <- read_excel(path = "/Users/vivian/EPICC/FluSc2_Comp/20220627_wk24-001-088_N1_N2_comparison.xlsx", sheet = "Sheet8") %>%
+  mutate(week = "Week 24") %>%
+  bind_rows(data26) %>%
+  arrange(week)
+
+
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#add columns with percent difference
+data <- data %>%
+  mutate(N1_diff = (SC2 - N1)/SC2 * 100) %>%
+  mutate(N2_diff = (SC2 - N2)/SC2 * 100)
+
+#table with N1 diff > 15%
+N1_outliers <- data %>%
+  filter(N1_diff > 15 | N1_diff < -15) %>%
+  mutate(N1_diff = signif(N1_diff, 3))
+
+#table with N2 diff > 15%
+N2_outliers <- data %>%
+  filter(N2_diff > 15 | N2_diff < -15) %>%
+  mutate(N2_diff = signif(N2_diff, 3))
+
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Scatter plot, outline outliers
+
+N1 <- data %>%
+  plot_ly(x=~SC2, y =~N1) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = data$week, 
+            colors = c("deeppink4", "deeppink1"),
+            text = ~paste('</br>', SampleID,
+                          '</br>Week: ', week,
+                        '</br>Flu SC2 Assay: ', SC2, 
+                        '</br>N1: ', N1,
+                        '</br>N2: ', N2,
+                        '</br>N1 diff: ', N1_diff), 
+            hoverinfo = 'text')  %>%
+  
+  add_trace(x=N1_outliers$SC2, y = N1_outliers$N1,
+            name = "N1 Outliers",
+            type = 'scatter', 
+            mode = 'markers', 
+            marker = list(color = "blue", symbol = 'star-diamond-open'),
+            text = ~paste('</br>', N1_outliers$SampleID,
+                          '</br>Week: ', N1_outliers$week,
+                        '</br>Flu SC2 Assay: ', N1_outliers$SC2, 
+                        '</br>N1: ', N1_outliers$N1,
+                        '</br>N2: ', N1_outliers$N2,
+                        '</br>N1 diff: ', N1_outliers$N1_diff), 
+            hoverinfo = 'text') %>%
+  
+   layout(title ='N1 Ct Comparison',
+         autosize = F, width = 650, height = 500,
+         yaxis = list(title = 'N1 Ct', 
+                      range=list(0,45),
+                      tickvals = seq(0, 45, 5)),
+         xaxis = list(title = 'Flu Sc2 Assay Ct', 
+                      range=list(0,45), 
+                      tickvals = seq(0, 45, 5)))
+N1
+```  
+<br>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}  
+N2 <- data %>%
+  plot_ly(x=~SC2, y =~N2) %>%
+  add_trace(type = 'scatter', 
+            mode = 'markers', 
+            color = data$week,
+            colors = c("deeppink4", "deeppink1"),
+            text = ~paste('</br>', SampleID,
+                          '</br>Week: ', week,
+                        '</br>Flu SC2 Assay: ', SC2, 
+                        '</br>N1: ', N1,
+                        '</br>N2: ', N2,
+                        '</br>N2 diff: ', N2_diff), 
+            hoverinfo = 'text')  %>%
+    
+    add_trace(x=N2_outliers$SC2, y = N2_outliers$N2,
+            name = "N2 Outliers",
+            type = 'scatter', 
+            mode = 'markers', 
+            marker = list(color = "blue", symbol = 'star-diamond-open'),
+            text = ~paste('</br>', N2_outliers$SampleID,
+                          '</br>Week: ', N2_outliers$week,
+                        '</br>Flu SC2 Assay: ', N2_outliers$SC2, 
+                        '</br>N1: ', N2_outliers$N1,
+                        '</br>N2: ', N2_outliers$N2,
+                        '</br>N2 diff: ', N2_outliers$N2_diff), 
+            hoverinfo = 'text') %>%
+  
+    
+    layout(title ='N2 Ct Comparison',
+         autosize = F, width = 650, height = 500,
+         yaxis = list(title = 'N2 Ct', 
+                      range=list(0,45),
+                      tickvals = seq(0, 45, 5)),
+         xaxis = list(title = 'Flu Sc2 Assay Ct', 
+                      range=list(0,45), 
+                      tickvals = seq(0, 45, 5)))
+
+N2
+  
+```

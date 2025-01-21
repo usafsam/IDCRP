@@ -1,0 +1,565 @@
+---
+title: "N1 and N2 Standard Curve Analysis"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r libraries,echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(writexl)
+library(readxl)
+library(plotly)
+library(viridis)
+library(DT)
+library(cowplot)
+library(ggpmisc)
+library(nlme) #run all regression
+```
+
+```{r data upload,echo=FALSE, message=FALSE, warning=FALSE}
+#upload txt file, remove header manually first
+#Have to import into 3 different data frames because of different column classes not being able to append
+data <- list.files(path = "/Users/vivian/EPICC/RTPCR_re-export/Jun2022_reexport", pattern ="*.txt", full.names = T)  %>%
+  setNames(nm = .) %>%
+  lapply(read.delim) %>%
+  bind_rows(.id = "Run") %>%
+  select(Run, Sample.Name, Target.Name, Task, CT, Quantity) %>% #select common columns
+  mutate(Quantity = replace(Quantity, Quantity == "10,000.000", 10000)) %>% #remove commas, don't work with as.numeric()
+  mutate(Quantity = replace(Quantity, Quantity == "1,000.000", 1000)) %>%
+  mutate(Quantity = as.numeric(Quantity)) #change to numeric to merge with data2
+
+data2 <- list.files(path = "/Users/vivian/EPICC/RTPCR_re-export/Jun2022_reexport/Double", pattern ="*.txt", full.names = T)  %>%
+  setNames(nm = .) %>%
+  lapply(read.delim) %>%
+  bind_rows(.id = "Run") %>%
+  rename(CT = Cт) %>%
+  select(Run, Sample.Name, Target.Name, Task, CT, Quantity)
+
+data3 <- list.files(path = "/Users/vivian/EPICC/RTPCR_re-export/Jun2022_reexport/Char", pattern ="*.txt", full.names = T)  %>%
+  setNames(nm = .) %>%
+  lapply(read.delim) %>%
+  bind_rows(.id = "Run") %>%
+  select(Run, Sample.Name, Target.Name, Task, CT, Quantity) %>% #select common columns
+  mutate(Quantity = replace(Quantity, Quantity == "10,000.000", 10000)) %>% #remove commas, don't work with as.numeric()
+  mutate(Quantity = replace(Quantity, Quantity == "1,000.000", 1000)) %>%
+  mutate(Quantity = as.numeric(Quantity)) #change to numeric to merge with data2
+
+#Join all imports
+data <- rbind(data, data2) 
+data <- rbind(data, data3)
+
+#Remove extra text from Run
+data$Run <-  gsub("/Users/vivian/EPICC/RTPCR_re-export/Jun2022_reexport/", "", data$Run)
+data$Run <-  gsub("_data.txt", "", data$Run) #remove extra text from file names
+data$Run <-  gsub(".txt", "", data$Run)
+data$Run <-  gsub("Char/", "", data$Run) #remove folder path
+data$Run <-  gsub("Double/", "", data$Run)
+```
+<br>
+
+### <span style="color: green;">Comparison of standard curves across 131 runs</span>
+##### <span style="color: gray;">Early runs had three standards for N1 and N2 with quantities of 2.5, 75, 1000. Often the 2.5 standard did not pop, leaving only two standards to define the curve. Later runs (~mid-April 2021) started running four standards at 10, 100, 1000, 10000 to ensure at least three standards were available to make the curve.</span>
+<br>
+```{r data clean,echo=FALSE, message=FALSE, warning=FALSE}
+#Create data with only standards
+std_data <- data %>%
+  filter(Task == "STANDARD") %>%
+  select(Run, Task, CT, Quantity, Target.Name)
+
+
+#Create pivot table with both N1 and N2 standards
+std_data_final <- std_data %>%
+  pivot_wider(names_from = Target.Name, values_from = CT) %>%
+  select(-Task, -RP) %>%
+  mutate(N1 = as.numeric(N1)) %>%
+  mutate(N2 = as.numeric(N2)) 
+
+#Count N1 standards per run
+run_count_N1 <- std_data_final %>%
+  select(Run, N1) %>%
+  filter(!is.na(N1)) %>%
+  count(Run)
+
+#Count N2 standards per run
+run_count_N2 <- std_data_final %>%
+  select(Run, N2) %>%
+  filter(!is.na(N2)) %>%
+  count(Run)
+
+#Add N1 count values to table
+std_data_final <- left_join(std_data_final, run_count_N1, by = "Run") %>%
+  rename(N1_n = n)
+
+#Find Runs with only 3 standards but from runs with quantities used after april 21
+Three_N1 <- std_data_final %>%
+  filter((N1_n == 3 & Quantity == 10000) | (N1_n == 3 & Quantity == 100) | (N1_n == 3 & Quantity == 10)) %>%
+  select(Run) %>%
+  unique()
+
+#Change count for those runs so they can be plotted separately from quantities before april 21
+#Remove runs with bad N1 standards
+std_data_final_N1 <- std_data_final %>%
+  mutate(N1_n = ifelse(std_data_final$Run %in% Three_N1$Run, "3*", N1_n)) %>%
+  mutate(N1_n = ifelse(std_data_final$Run == "20220103_EPICC_VH61", "2*", N1_n)) %>% #Run with new stds with only 2
+  filter(N1_n != 1) %>% #!!!!!!!
+  filter(Run != "20200610_EPICC_MC")  %>% #!!!!!!! cts are same value for 1000 and 75
+  filter(Run != "20210210-EPICC-RUN2-CHQ6") %>% # positive slope
+  filter(Run != "20220103_EPICC_VH61") #weird N1
+
+#Add N2 count values to table
+std_data_final <- left_join(std_data_final, run_count_N2, by = "Run") %>%
+  rename(N2_n = n)
+
+#Find Runs with only 3 standards but from runs with quantities used after april 21
+Three_N2 <- std_data_final %>%
+  filter((N2_n == 3 & Quantity == 10000) | (N2_n == 3 & Quantity == 100) | (N2_n == 3 & Quantity == 10)) %>%
+  select(Run) %>%
+  unique()
+
+#Change count for those runs so they can be plotted separatly from quantities before april 21
+#Remove runs with bad N2 standards
+std_data_final_N2 <- std_data_final %>%
+  mutate(N2_n = ifelse(std_data_final$Run %in% Three_N2$Run, "3*", N2_n)) %>%
+  filter(Run != "20211007_EPICC_RUN1_CHdx") %>% #100 and 10 switched?
+  filter(Run != "20200930_EPICC_RUN1_SAH") %>% # only one N2 std
+  filter(Run != "20210217-EPICC-RUN2-JRQ6") %>% #positive slope
+  filter(Run != "20210210-EPICC-RUN2-CHQ6") %>% #positive slope
+  filter(Run != "20200723_EPICC_KDR1") #no N2 standards
+```
+
+```{r N1 fit,echo=FALSE, message=FALSE, warning=FALSE}
+#Linear model to fit line to N1 standard curve
+fitN1 = lm(log10(Quantity) ~ N1, std_data_final_N1)
+
+#Select data from run with good N1 stds
+good_N1_fit <- std_data_final %>%
+  filter(Run == "20210623_EPICC_RUN2_SAHQ")
+
+#linear model for data with good N1 stds
+fitN1_4 <- lm(log10(Quantity) ~ N1, good_N1_fit)
+```
+<br>
+
+### <span style="color: green;">N1 Standard Curve</span>
+##### <span style="color: gray;">Three runs were removed from the analysis due to clearly problematic values for the N1 standards:</span>
+##### <span style="color: gray;">20200610_EPICC_MC had the same N1 value for both 1000 and 75</span>
+##### <span style="color: gray;">20210210-EPICC-RUN2-CHQ6 had a positive slope</span>
+##### <span style="color: gray;">20220103_EPICC_VH61 had only 2 of the 4 new standards and was very off </span>
+<br>
+
+##### <span style="color: gray;">The plot below shows the N1 standards for each run with the pink line fitted to a typical run with four good N1 standards (20210623_EPICC_RUN2_SAHQ) and the red line fitted to all data </span>
+<br>
+```{r N1 scatter,echo=FALSE, message=FALSE, warning=FALSE}
+std_scatter <- std_data_final_N1 %>%
+  filter(!is.na(N1)) %>% #remove NA, otherwise fitted line does not work
+  plot_ly(x = ~N1, y = ~Quantity) %>%
+  add_trace(type = 'scatter',
+          mode = 'markers',
+          color = ~Run,
+          colors = viridis_pal(option = "H")(5),
+          text = ~Run,
+          hoverinfo = 'text') %>%
+  
+  add_lines(x = ~N1, y = 10^fitted(fitN1), name = "Overall Trend") %>%
+  add_lines(x = good_N1_fit$N1, y = 10^fitted(fitN1_4), name = "20210623 Trend") %>%
+    
+  layout(title ='N1 Standard Curve',
+         autosize = F, width = 1000, height = 600,
+         yaxis = list(title = 'Quantity', type = 'log', 
+                      range=list(0,4.2)),
+         xaxis = list(title = 'Ct', 
+                      range=list(15,45),
+                      tickvals = seq(0, 45, 5)))
+
+std_scatter
+```
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+### <span style="color: green;">N1 Standard Curve Equations</span>
+##### <span style="color: gray;">The plot below splits the runs into groups based on the quantities of the standards used and shows the line of best fit for each grouping</span>
+<br>
+```{r N1 scatter group, echo=FALSE, message=FALSE, warning=FALSE}
+#Scatter plot with trendline and equation
+gg_std_scatter_N1 <- ggplot(std_data_final_N1, aes(x = N1, y = Quantity)) +
+  geom_point() +
+  scale_y_continuous(trans='log10') + #log scale for y axis
+  theme_cowplot() +
+  theme(legend.position="none") + # legend.key.size = unit(1, "cm")) + #remove legend
+  labs(x = "N1 Ct") +
+  facet_wrap(N1_n ~ .) +
+  stat_poly_line(fullrange = TRUE, se = FALSE) + #add line
+  stat_poly_eq(aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~~")), 
+               parse=TRUE,label.x.npc = "right") #add equation
+
+
+gg_std_scatter_N1
+```
+<br>
+
+##### <span style="color: gray;">The plot below shows the line of best fit for each run, individually</span>
+<br>
+```{r N1 lines group, echo=FALSE, message=FALSE, warning=FALSE}
+#Scatter plot with trendline and equation
+ggplot(std_data_final_N1, aes(x = N1, y = Quantity, color = Run)) +
+  geom_point() +
+  scale_y_continuous(trans='log10') + #log scale for y axis
+  theme_cowplot() +
+  theme(legend.position="none") + # legend.key.size = unit(1, "cm")) + #remove legend
+  labs(x = "N1 Ct") +
+  facet_wrap(N1_n ~ .) +
+  stat_poly_line(fullrange = TRUE, se = FALSE) #add line
+```
+<br>
+
+##### <span style="color: gray;">The plot below shows the line of best fit for each grouping, superimposed.</span>
+<br>
+```{r N1 lines, echo=FALSE, message=FALSE, warning=FALSE}
+#Scatter plot with trendline and equation
+gg_std_scatter_N1_run <- ggplot(std_data_final_N1, aes(x = N1, y = Quantity, color = N1_n)) +
+  geom_point() +
+  scale_y_continuous(trans='log10') + #log scale for y axis
+  theme_cowplot() +
+  #theme(legend.position="none") + #remove legend
+  labs(x = "N1 Ct") +
+  stat_poly_line(se = FALSE, fullrange = TRUE) + #add line
+  stat_poly_eq(aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~~")), 
+               parse=TRUE,label.x.npc = "right")#add equation
+
+
+
+gg_std_scatter_N1_run
+```
+<br>
+```{r N1 nlme, echo=FALSE, message=FALSE, warning=FALSE}
+## List all slopes and intercepts using nlme::lmList for N1 Ct and Standard Quantity
+
+#add column with combined Run and N1_n
+std_data_final_N1_2 <- std_data_final_N1 %>%
+  mutate(Run_N1_n = interaction(std_data_final_N1$Run, std_data_final_N1$N1_n)) 
+
+#List equation for each Run/N1_n combination, omitting NA entries
+N1_lmList <- lmList(log10(Quantity) ~ N1 | Run_N1_n, std_data_final_N1_2, na.action = na.omit)
+
+#Write slopes & intercepts from lmList to tibble and then separate Run and N1_n to original columns
+N1_lm_output <- tibble(Run_N1_n = names(N1_lmList),
+                 intercept = summary(N1_lmList)$coef[,1,1],
+                 slope = summary(N1_lmList)$coef[,1,2],
+                 r_sq = summary(N1_lmList)$r.squared) %>% 
+  separate(Run_N1_n, c("Run", "N1_n"), sep="\\.") %>%
+  mutate(N1_n = replace(N1_n, N1_n == "2", "Two - old quantities")) %>%
+  mutate(N1_n = replace(N1_n, N1_n == "3", "Three - old quantities")) %>%
+  mutate(N1_n = replace(N1_n, N1_n == "4", "Four - new quantities")) %>%
+  mutate(N1_n = replace(N1_n, N1_n == "3*", "Three - new quantities"))
+```
+<br>
+
+##### <span style="color: gray;">The plot below shows the distribution of slopes based on grouping. </span>
+<br>
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+N1_violin_slope <- N1_lm_output %>%
+  plot_ly(y=~slope,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1, 
+          pointpos =0, 
+          split = ~N1_n,
+          text = ~Run, 
+          hoverinfo = 'text') %>%
+          
+  layout(title ='Distribution of slope of standard curves for N1',
+         yaxis = list(title = 'Slope', range=list(-.7, 0)),
+         legend = list(title = list(text = 'Number of Standards')))
+
+N1_violin_slope
+         
+```
+<br>
+
+##### <span style="color: gray;">The plot below shows the distribution of intercepts based on grouping. </span>
+<br>
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+N1_violin_intercept <- N1_lm_output %>%
+  plot_ly(y=~intercept,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1, 
+          pointpos =0, 
+          split = ~N1_n,
+          text = ~Run, 
+          hoverinfo = 'text') %>%
+          
+  layout(title ='Distribution of intercept of standard curves for N1',
+         yaxis = list(title = 'Intercept', range=list(0, 24)),
+         legend = list(title = list(text = 'Number of Standards')))
+
+N1_violin_intercept
+         
+```
+<br>
+
+##### <span style="color: gray;">The plots below shows quantity (RNA copy) values calculated using the standard equation for each run with a N1 Ct value of 15 and then an N1 Ct value of 35. With a Ct of 15, most runs are within two orders of magnitude within each grouping and three orders of magnitude overall. The runs using the old quantities have a higher average quantity. 20210128-EPICC-RUN1-SAHQ is seen as an outlier in here and for slope and intercept.</span>
+##### <span style="color: gray;">With a Ct of 35, most runs are within two orders of magnitude within each grouping and  overall. The runs using the old quantities have a similar average quantity. 20211119-EPICC-RUN1-VHMRCH6 is seen as an outlier in here and for slope and intercept.</span>
+<br>
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+N1_quantities_lm <- N1_lm_output %>%
+  mutate(Fifteen = 10^(intercept + slope*15)) %>%
+  mutate(Twenty = 10^(intercept + slope*20)) %>%
+  mutate(`Twenty Five` = 10^(intercept + slope*25)) %>%
+  mutate(Thirty = 10^(intercept + slope*30)) %>%
+  mutate(`Thirty Five` = 10^(intercept + slope*35))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+N1_quantities_plot15 <- N1_quantities_lm %>%
+  plot_ly(y = ~Fifteen) %>%
+  add_trace(type = 'box',
+            jitter = 0.3, pointpos = -1.8, boxpoints = 'all',
+            text = ~Run,
+            hoverinfo = 'text',
+          split = ~N1_n) %>%
+          
+  layout(title ='N1 Quantities given by standard equation with Ct value set to 15',
+         yaxis = list(title = 'N1 Quantity', type = "log"))
+  
+N1_quantities_plot35 <- N1_quantities_lm %>%
+  plot_ly(y = ~`Thirty Five`) %>%
+  add_trace(type = 'box',
+            jitter = 0.3, pointpos = -1.8, boxpoints = 'all',
+            text = ~Run,
+            hoverinfo = 'text',
+          split = ~N1_n) %>%
+          
+  layout(title ='N1 Quantities given by standard equation with Ct value set to 35', 
+         yaxis = list(title = 'N1 Quantity', type = "log"))
+
+N1_quantities_plot15 
+N1_quantities_plot35
+```
+
+### <span style="color: green;">N2 Standard Curve</span>
+##### <span style="color: gray;">Five runs were removed from the analysis due to clearly problematic values for the N2 standards:</span>
+##### <span style="color: gray;">	20211007_EPICC_RUN1_CHdx looks like 100 and 10 were possibly switched</span>
+##### <span style="color: gray;"> 20200930_EPICC_RUN1_SAH had only one N2 standard</span>
+##### <span style="color: gray;"> 20210217-EPICC-RUN2-JRQ6 had a positive slope</span>
+##### <span style="color: gray;"> 20210210-EPICC-RUN2-CHQ6 had a positive slope</span>
+##### <span style="color: gray;"> 20200723_EPICC_KDR1 had no N2 standards</span>
+<br>
+
+##### <span style="color: gray;">The plot below shows the N2 standards for each run with the dark blue line fitted to a typical run with four good N2 standards (20210616_EPICC_RUN1_CHDX) and the light blue line fitted to all data</span>
+<br>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#linear model to fit line to N2 standard curve
+fitN2 = lm(log10(Quantity) ~ N2, std_data_final)
+
+#Select data from run with good N2 stds
+good_N2_fit <- std_data_final %>%
+  filter(Run == "20210616_EPICC_RUN1_CHDX")
+
+#linear model for data with good N1 stds
+fitN2_4 <- lm(log10(Quantity) ~ N2, good_N2_fit, family = poisson)
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE,}
+std_scatter_N2 <- std_data_final %>%
+  filter(!is.na(N2)) %>% #remove NA, otherwise fitted line does not work
+  plot_ly(x = ~N2, y = ~Quantity) %>%
+  add_trace(type = 'scatter',
+          mode = 'markers',
+          color = ~Run,
+          colors = viridis_pal(option = "H")(5),
+          text = ~Run,
+          hoverinfo = 'text') %>%
+  
+  add_lines(x = ~N2, y = 10^fitted(fitN2), name = "Overall Trend") %>%
+  add_lines(x = good_N2_fit$N2, y = 10^fitted(fitN2_4), name = "20210616 Trend") %>%
+    
+  layout(title ='N2 Standard Curve',
+         autosize = F, width = 1000, height = 600,
+         yaxis = list(title = 'Quantity', type = "log", 
+                      range=list(0,4.2)),
+         xaxis = list(title = 'Ct', 
+                      range=list(15,45),
+                      tickvals = seq(0, 45, 5)))
+
+std_scatter_N2
+```
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+### <span style="color: green;">N2 Standard Curve Equations</span>
+##### <span style="color: gray;">The plot below splits the runs into groups based on the quantities of the standards used and shows the line of best fit for each grouping</span>
+<br>
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Scatter plot with trendline and equation
+gg_std_scatter_N2 <- ggplot(std_data_final_N2, aes(x = N2, y = Quantity)) +
+  geom_point() +
+  scale_y_continuous(trans='log10') + #log scale for y axis
+  theme_cowplot() +
+  theme(legend.position="none") + #remove legend
+  labs(x = "N2 Ct") +
+  facet_wrap(N2_n ~ .) +
+  stat_poly_line(fullrange = TRUE, se = FALSE) + #add line
+  stat_poly_eq(aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~~")), 
+               parse=TRUE,label.x.npc = "right") #add equation
+
+
+gg_std_scatter_N2
+```
+<br>
+
+##### <span style="color: gray;">The plot below shows the line of best fit for each run, individually</span>
+<br>
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Scatter plot with trendline and equation
+gg_std_scatter_N2_run <- ggplot(std_data_final_N2, aes(x = N2, y = Quantity, color = Run)) +
+  geom_point() +
+  scale_y_continuous(trans='log10') + #log scale for y axis
+  theme_cowplot() +
+  theme(legend.position="none") + #remove legend
+  labs(x = "N2 Ct") +
+  facet_wrap(N2_n ~ .) +
+  stat_poly_line(se = FALSE, fullrange = TRUE)  #add line, remove error
+  #stat_poly_eq(aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~~")), 
+               #parse=TRUE,label.x.npc = "right") #add equation
+
+
+gg_std_scatter_N2_run
+```
+<br>
+
+##### <span style="color: gray;">The plot below shows the line of best fit for each grouping, superimposed.</span>
+<br>
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+## List all slopes and intercepts using nlme::lmList for N2 Ct and Standard Quantity
+
+#add column with combined Run and N1_n
+std_data_final_N2_2 <- std_data_final_N2 %>%
+  mutate(Run_N2_n = interaction(std_data_final_N2$Run, std_data_final_N2$N2_n)) 
+
+#List equation for each Run/N1_n combination, omitting NA entries
+N2_lmList <- lmList(log10(Quantity) ~ N2 | Run_N2_n, std_data_final_N2_2, na.action = na.omit)
+
+#Write slopes & intercepts from lmList to tibble and then separate Run and N1_n to original columns
+N2_lm_output <- tibble(Run_N2_n = names(N2_lmList),
+                 intercept = summary(N2_lmList)$coef[,1,1],
+                 slope = summary(N2_lmList)$coef[,1,2],
+                 r_sq = summary(N2_lmList)$r.squared) %>% 
+  separate(Run_N2_n, c("Run", "N2_n"), sep="\\.") %>%
+  mutate(N2_n = replace(N2_n, N2_n == "2", "Two - old quantities")) %>%
+  mutate(N2_n = replace(N2_n, N2_n == "3", "Three - old quantities")) %>%
+  mutate(N2_n = replace(N2_n, N2_n == "4", "Four - new quantities")) %>%
+  mutate(N2_n = replace(N2_n, N2_n == "3*", "Three - new quantities"))
+```
+<br>
+
+##### <span style="color: gray;">The plot below shows the distribution of slopes based on grouping. </span>
+<br>
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+N2_violin_slope <- N2_lm_output %>%
+  plot_ly(y=~slope,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1, 
+          pointpos =0, 
+          split = ~N2_n,
+          text = ~Run, 
+          hoverinfo = 'text') %>%
+          
+  layout(title ='Distribution of slope of standard curves for N2',
+         yaxis = list(title = 'Slope', range=list(-.6, 0)),
+         legend = list(title = list(text = 'Number of Standards')))
+
+N2_violin_slope
+```
+<br>
+
+##### <span style="color: gray;">The plot below shows the distribution of intercepts based on grouping. </span>
+<br>
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+N2_violin_intercept <- N2_lm_output %>%
+  plot_ly(y=~intercept,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1, 
+          pointpos =0, 
+          split = ~N2_n,
+          text = ~Run, 
+          hoverinfo = 'text') %>%
+          
+  layout(title ='Distribution of intercept of standard curves for N2',
+         yaxis = list(title = 'Intercept', range=list(0, 18)),
+         legend = list(title = list(text = 'Number of Standards')))
+
+N2_violin_intercept
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+N2_quantities_lm <- N2_lm_output %>%
+  mutate(Fifteen = 10^(intercept + slope*15)) %>%
+  mutate(Twenty = 10^(intercept + slope*20)) %>%
+  mutate(`Twenty Five` = 10^(intercept + slope*25)) %>%
+  mutate(Thirty = 10^(intercept + slope*30)) %>%
+  mutate(`Thirty Five` = 10^(intercept + slope*35))
+```
+<br>
+
+##### <span style="color: gray;">The plots below shows quantity (RNA copy) values calculated using the standard equation for each run with a N2 Ct value of 15 and then an N2 Ct value of 35. With a Ct of 15, most runs are within two orders of magnitude within each grouping. The runs using the old quantities have a higher average quantity. 20210601_EPICC_RUN1_DM6 and 20211109-EPICC-RUN1-CHDx are seen as outliers here and for slope and intercept.</span>
+##### <span style="color: gray;">With a Ct of 35, most runs are within two orders of magnitude within each grouping and  overall. The runs using the old quantities have a similar average quantity. 20211109-EPICC-RUN1-CHDx is seen as an outlier in here and for slope and intercept.</span>
+<br>
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+N2_quantities_plot15 <- N2_quantities_lm %>%
+  plot_ly(y = ~Fifteen) %>%
+  add_trace(type = 'box',
+            text = ~Run,
+            jitter = 0.3, pointpos = -1.8, boxpoints = 'all',
+          hoverinfo = 'text',
+          split = ~N2_n) %>%
+          
+  layout(title ='N2 Quantities given by standard equation with Ct value set to 15',
+         yaxis = list(title = 'N2 Quantity', type = "log"))
+  
+N2_quantities_plot35 <- N2_quantities_lm %>%
+  plot_ly(y = ~`Thirty Five`) %>%
+  add_trace(type = 'box', 
+            text = ~Run,
+            jitter = 0.3, pointpos = -1.8, boxpoints = 'all',
+          hoverinfo = 'text',
+          split = ~N2_n) %>%
+          
+  layout(title ='N2 Quantities given by standard equation with Ct value set to 35',
+         yaxis = list(title = 'N2 Quantity', type = "log"))
+
+N2_quantities_plot15 
+N2_quantities_plot35
+```
+<br>
+
+### <span style="color: green;">Conclusion</span>
+##### <span style="color: gray;">Overall slight changes in the standard equations do not significantly impact the calculated quantities (RNA copies). Of 113 runs, 7 had standards that were clearly problematic and need to be removed before the analysis do to clear inconsistencies, likely from wet lab issues. Of the remaining 106 runs, four had diveregent enought standard equations to significantly impact the calculated quantities. Problems can occur regardless of the number of standards used, so in future analyses, standard curves should be carefully monitored to prevent problematic calculations of quantities from entering the data.</span>
+##### <span style="color: gray;">It seems like back-calculating the quantities for the runs with problematic data using the average standard equation would provide a better representation of the actual RNA copies than the current data.</span>
+<br>
+
+##### <span style="color: red;">Do we want to back-calculate quantities from problematic runs? Or just note the problem in the data?</span>
+<br>

@@ -1,0 +1,1035 @@
+---
+title: "Reinfections RT-PCR data analysis"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(viridis)
+library(readxl)
+library(knitr)
+library(reshape2)
+library(cowplot)
+library(ggpubr)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r load files}
+#load data from Deanna email with metadata, 2216 specimens
+data_og <- read_excel(path = "/Users/vivian/EPICC/Reinfects/RI_sort_220808_rounded.xlsx") %>%
+  mutate(agegroup = case_when(Age <= 19 ~ '0-19',
+                              Age >19  & Age <= 29 ~ '20-29',
+                              Age >29  & Age <= 39 ~ '30-39',
+                              Age >39  & Age <= 49 ~ '40-49',
+                              Age >49  & Age <= 59 ~ '50-59',
+                              Age >59  ~ '60+')) #bin by age group
+
+#specimens in og data with n1/n2, 684 specimens
+data_og_wN1N2 <- data_og %>%
+  filter(!is.na(N1)) 
+
+#load all RTPCR data N1/N2, 769 specimnes
+new_N1N2_data <- read_excel(path = "/Users/vivian/EPICC/Reinfects/Reinfections_RTPCR_16Aug22.xlsx", sheet = "data")
+
+#df with just N1 N2 data missing in og data, 85 specimens (=769 - 684)
+data_w_newN1N2 <- new_N1N2_data %>%
+  filter(!(SampleID %in% data_og_wN1N2$SampleID)) %>% #remove sampleIDs already accounted for in og
+  mutate(Blind_Name = SampleID) %>%
+  left_join(data_og, by = "Blind_Name") %>%
+  select(-SampleID.y, -N1.y, -N2.y, -RP.y, -`N1 Quantity.y`, -`N2 Quantity.y`) %>% #keep only columns with new N1/N2
+  rename(SampleID = SampleID.x,
+         N1 = N1.x,
+         N2= N2.x, 
+         RP = RP.x,
+         `N1 Quantity` = `N1 Quantity.x`,
+         `N2 Quantity` = `N2 Quantity.x`)
+
+
+#Sc2 Ct for specimens week 8-30 with no N1/N2 data, remove NA and negatives, 68 specimens
+flusc2_data <- read_excel(path = "/Users/vivian/EPICC/Reinfects/RI_flusc2_ct.xlsx") %>%
+  filter(!is.na(FluSc2_Ct)) %>%
+  filter(FluSc2_Ct > 0) %>%
+  left_join(data_og, by = "Blind_Name") 
+  
+#bind all with N1/N2 or flusc2 together (684 + 85 + 68 = 837)
+data_all <- data_og_wN1N2 %>%
+  bind_rows(data_w_newN1N2) %>%
+  bind_rows(flusc2_data)  
+
+#data with new N1/N2 that does not match back to a pat_id in og data
+missing <- data_all %>%
+  filter(is.na(pat_id))
+```
+\textbf{N1 Quantity for patients with multiple positive specimens}
+
+\begin{itemize}
+\item There were 2297 specimens in the data provided on 08Aug22.
+\item 769 of these specimens had N1/N2 RTPCR data
+\item 74 of these specimens had no N1/N2 RTPCR data, but have Flu/Sc2 RTPCR data
+\item Of these specimens, 629 were positive specimens with N1/N2 data from 409 patients. (Some patients only had one positive.)
+\item 194 patients had multiple positive specimens consisting of 414 total positive samples.
+\end{itemize}
+
+```{r data clean}
+#remove negatives/invalids/inconclusives, and ids with no match 629 specimens
+data_pos <- data_all %>%
+  filter(N1 != 0 & N2 != 0) %>%
+  filter(!(is.na(pat_id)))
+
+#count number of positive specimens for each pat_id, 194 patients
+#remove those with only 1
+data_count <- data_pos %>%
+  count(pat_id) %>%
+  filter(n != 1) #filter more than one pos per patient
+
+#df with only pat_ids with data count >1, 414 specimens
+data_pos_mult <- data_pos %>%
+  filter(pat_id %in% data_count$pat_id)
+
+#pivot to determine all collection dates for each pat_id with more than one pos
+#410 patients, including those with only one positive
+data_wide <- data_pos %>%
+  group_by(pat_id) %>%
+  mutate(id_rows = row_number()) %>%
+  pivot_wider(  #Select each Collection date from each row for each pat_id in pivot table
+    id_cols = c(pat_id),
+    names_from = id_rows,
+    values_from = Collection_date,
+    names_prefix = "Positive") 
+
+#Only 1 collection date, 215 patients
+data_wide_1 <- data_wide %>%
+  filter(is.na(Positive2))
+
+#Consider 2nd collection date, 194 patients
+data_wide_2 <- data_wide %>%
+  filter(!is.na(Positive2)) %>%
+  mutate(time1_2 = difftime(Positive2, Positive1, units="days"), #days between 1st and 2nd coll date
+         cat14 = case_when(time1_2 <= 14 ~ "<= 14 days",          
+                           time1_2 > 14 ~ "> 14 days"),          #categorize by < or > 14 between 1st and 2nd coll date
+         cat30 = case_when(time1_2 <= 30 ~ "<= 30 days",          
+                           time1_2 > 30 ~ "> 30 days"),          #categorize by < or > 30 between 1st and 2nd coll date
+         cat45 = case_when(time1_2 <= 45 ~ "<= 45 days",          
+                           time1_2 > 45 ~ "> 45 days"),
+         cat60 = case_when(time1_2 <= 60 ~ "<= 60 days",          
+                           time1_2 > 60 ~ "> 60 days"),
+         cat90 = case_when(time1_2 <= 90 ~ "<= 90 days",
+                           time1_2 > 90 ~ "> 90 days"))          #categorize by < or > 90 between 1st and 2nd coll date
+
+#Consider 3rd collection date, 21 p
+data_wide_3 <- data_wide %>%
+  filter(!is.na(Positive3)) %>%
+  mutate(time1_3 = difftime(Positive3, Positive1, units="days"), #days between 1st and 3rd coll date
+         cat14 = case_when(time1_3 <= 14 ~ "<= 14 days",          
+                           time1_3 > 14 ~ "> 14 days"),          #categorize by < or > 14 between 1st and 2nd coll date
+         cat30 = case_when(time1_3 <= 30 ~ "<= 30 days",          
+                           time1_3 > 30 ~ "> 30 days"),          #categorize by < or > 30 between 1st and 2nd coll date
+         cat45 = case_when(time1_3 <= 45 ~ "<= 45 days",          
+                           time1_3 > 45 ~ "> 45 days"),
+         cat60 = case_when(time1_3 <= 60 ~ "<= 60 days",          
+                           time1_3 > 60 ~ "> 60 days"),
+         cat90 = case_when(time1_3 <= 90 ~ "<= 90 days",
+                           time1_3 > 90 ~ "> 90 days"))          #categorize by < or > 90 between 1st and 2nd coll date
+
+#Consider 4th collection date, 4 p
+data_wide_4 <- data_wide %>%
+  filter(!is.na(Positive4)) %>%
+  mutate(time1_4 = difftime(Positive4, Positive1, units="days"), #days between 1st and 4th coll date
+         cat14 = case_when(time1_4 <= 14 ~ "<= 14 days",          
+                           time1_4 > 14 ~ "> 14 days"),          #categorize by < or > 14 between 1st and 2nd coll date
+         cat30 = case_when(time1_4 <= 30 ~ "<= 30 days",          
+                           time1_4 > 30 ~ "> 30 days"),          #categorize by < or > 30 between 1st and 2nd coll date
+         cat45 = case_when(time1_4 <= 45 ~ "<= 45 days",          
+                           time1_4 > 45 ~ "> 45 days"),
+         cat60 = case_when(time1_4 <= 60 ~ "<= 60 days",          
+                           time1_4 > 60 ~ "> 60 days"),
+         cat90 = case_when(time1_4 <= 90 ~ "<= 90 days",
+                           time1_4 > 90 ~ "> 90 days"))          #categorize by < or > 90 between 1st and 2nd coll date
+
+
+#Consider 5th collection date, 1 p
+data_wide_5 <- data_wide %>%
+  filter(!is.na(Positive5)) %>%
+  mutate(time1_5 = difftime(Positive5, Positive1, units="days"), #days between 1st and 5th coll date
+         cat14 = case_when(time1_5 <= 14 ~ "<= 14 days",          
+                           time1_5 > 14 ~ "> 14 days"),          #categorize by < or > 14 between 1st and 2nd coll date
+         cat30 = case_when(time1_5 <= 30 ~ "<= 30 days",          
+                           time1_5 > 30 ~ "> 30 days"),          #categorize by < or > 30 between 1st and 2nd coll date
+         cat45 = case_when(time1_5 <= 45 ~ "<= 45 days",          
+                           time1_5 > 45 ~ "> 45 days"),
+         cat60 = case_when(time1_5 <= 60 ~ "<= 60 days",          
+                           time1_5 > 60 ~ "> 60 days"),
+         cat90 = case_when(time1_5 <= 90 ~ "<= 90 days",
+                           time1_5 > 90 ~ "> 90 days"))          #categorize by < or > 90 between 1st and 2nd coll date
+
+#connect positive number and category back to og data
+data_pos_1 <- left_join(data_wide_1, data_pos, by = "pat_id") %>%
+  mutate(Positive = 1)
+
+data_pos_2 <- left_join(data_wide_2, data_pos, by = "pat_id") %>% 
+  mutate(Positive = ifelse(Collection_date == Positive2, 2, 
+                           ifelse(Collection_date == Positive1, 1, NA))) %>%
+  filter(!is.na(Positive)) #keep only pos 1 and 2
+
+data_pos_3 <- left_join(data_wide_3, data_pos, by = "pat_id") %>%
+  mutate(Positive = ifelse(Collection_date == Positive3, 3, NA)) %>% #create category to order positives per pat_id 
+  filter(Positive == 3) #keep only pos 3 (1 and 2 already accounted for)
+
+data_pos_4 <- left_join(data_wide_4, data_pos, by = "pat_id") %>%
+  mutate(Positive = ifelse(Collection_date == Positive4, 4, NA)) %>% #create category to order positives per pat_id 
+  filter(Positive == 4) #keep only pos 4 (1,2,3 already accounted for)
+  
+data_pos_5 <- left_join(data_wide_5, data_pos, by = "pat_id") %>%
+  mutate(Positive = ifelse(Collection_date == Positive5, 5, NA)) %>% #create category to order positives per pat_id 
+  filter(Positive == 5) #keep only pos 5 (1,2,3,4 already accounted for)
+ 
+
+data_pos_all <- data_pos_1 %>% #bind all types of positives back together, 629 specimens
+  bind_rows(data_pos_2) %>%
+  #bind_rows(data_pos_3) %>% #option to include 3rd, 4th, 5th positives
+  #bind_rows(data_pos_4) %>%
+  #bind_rows(data_pos_5) %>%
+  mutate(Sample = ifelse(Collection_date == Positive1, "First", "Second")) %>% #categorize by 1st and 2nd pos
+  mutate(logN1quant = log10(`N1 Quantity`)) %>% #log 10 of N1 Quantity to allow for linear plotting/statistics
+  mutate(time = ifelse(Positive == 1, 0,
+                       ifelse(!is.na(time1_2), time1_2,
+                               #ifelse(!is.na(time1_3), time1_3, 
+                                      #ifelse(!is.na(time1_4), time1_4,
+                                             #ifelse(!is.na(time1_5), time1_5, 
+                              NA)))
+
+```
+
+```{r}
+#function to calculate stats to add to plot
+#upper_limit multiplier gives more space on y axis of plot to fit stat summary
+#Mean and stdev rounded to 1 decimal point
+
+get_box_stats <- function(y, upper_limit = max(data_pos_all$logN1quant) * 1.3) {
+  return(data.frame(
+    y = upper_limit,
+    label = paste(
+      "Count =", length(y), "\n",
+      "Mean =", round(mean(y), 1), "\n",
+      "Med =", round(median(y), 1), "\n")))
+}
+
+#just count
+get_box_count <- function(y, upper_limit = max(data_pos_all$logN1quant) * 1.1) {
+  return(data.frame(
+    y = upper_limit,
+    label = paste(length(y))))
+}
+```
+\pagebreak
+
+\textbf{Viral load and days since first positive}
+
+N1 Quantity for all positive specimens plotted against days since first positive shows that the majority of specimens were taken shortly after the first positive and have a large range of N1 quantity. Max N1 Quantity decreases over the first ~120 days since the first positive. Then there is a range around 200 days where no specimens were taken. High max N1 quantities are seen again after 300 days which is indicative of reinfections being present in the dataset.
+
+```{r}
+plot_time <- data_pos_all %>%
+  ggplot(aes(time, logN1quant)) +
+    geom_point() +
+    labs(title = "Viral load and time since first positive",
+         y = "log(N1 Quantity)",
+         x = "Days since first positive specimen") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot()
+
+plot_time
+```
+\pagebreak
+
+\textbf{14 Days}
+
+N1 Quantity comparison from positive specimens collected less than 14 days apart (left) and more than 
+14 days apart (right).
+\begin{itemize}
+\item A decrease in RNA copies, on average, is seen in both specimens collected less than 14 days apart and more than 
+14 days apart. A majority of the specimens collected more than 14 days apart were collected within two months as seen in the histogram and thus are likely continuation of the same illness and not reinfection
+\end{itemize}
+
+```{r}
+#plot all specimens <= 14 days apart grouped and colored by "Sample" (1st and 2nd positive)
+
+plot_less14 <- data_pos_all %>%
+  filter(cat14 == "<= 14 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") + #line between same pat_id
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) + #point for each sample
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) + #stats from function get_box_stats
+    labs(#can also add title, subtitle and/or caption
+          y = "log(N1 Quantity)",
+          x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) + #min, max and ticks of y axis
+    theme_cowplot() +
+    theme(legend.position = "none") #remove legend
+
+
+#plot all specimens > 14 days apart and colored by "Sample" (1st and 2nd positive)
+plot_more14 <- data_pos_all %>%
+  filter(cat14 == "> 14 days") %>%
+  filter(!is.na(time1_2)) %>%
+  ggplot(aes(Sample, `logN1quant`, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+          y = "log(N1 Quantity)",
+          x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none")
+```
+```{r}
+#add histograms for less than and more than 14 days to show distribution of time since first positive
+plot_hist_less14 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat14 == "<= 14 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 1) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive',
+       y = "")  +
+  scale_y_continuous(breaks = seq(0, 40, by = 20), limits = c(0,40))
+
+plot_hist_more14 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat14 == "> 14 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 60) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive', 
+       y = "") +
+  scale_x_continuous(breaks = seq(0, 600, by = 120)) +
+  scale_y_continuous(breaks = seq(0, 40, by = 20)) 
+
+#multiple in one fig 
+ggarrange(plot_hist_less14, plot_hist_more14, plot_less14, plot_more14, heights = c(1,3), labels = c("<= 14 Days", "> 14 Days", "", ""), hjust = c(-1.5, -1.7))
+```
+```{r}
+aov_14 <- aov(logN1quant ~ cat14 * Sample, data = data_pos_all)
+summary(aov_14)
+```
+\pagebreak
+
+\textbf{30 Days}
+
+N1 Quantity comparison from positive specimens collected less than 30 days apart (left) and more than 
+30 days apart (right).
+\begin{itemize}
+\item A decrease in RNA copies, on average, is seen in specimens collected less than 30 days apart and a slight increase is seen, on average, in specimens more than 30 days apart
+\end{itemize}
+```{r}
+plot_less30 <- data_pos_all %>%
+  filter(cat30 == "<= 30 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none") #remove legend
+  
+plot_more30 <- data_pos_all %>%
+  filter(cat30 == "> 30 days") %>%
+  ggplot(aes(Sample, `logN1quant`, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none")
+```
+```{r}
+#add histograms for less than and more than 30 days to show distribution of time since first positive
+plot_hist_less30 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat30 == "<= 30 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 2) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive',
+       y = "") + 
+  scale_x_continuous(breaks = seq(0, 30, by = 4)) +
+  scale_y_continuous(breaks = seq(0, 40, by = 20)) 
+
+plot_hist_more30 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat30 == "> 30 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 60) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive', 
+       y = "") +
+  scale_x_continuous(breaks = seq(30, 600, by = 120)) +
+  scale_y_continuous(breaks = seq(0, 8, by = 4)) 
+
+#multiple in one fig 
+ggarrange(plot_hist_less30, plot_hist_more30, plot_less30, plot_more30, heights = c(1,3), labels = c("<= 30 Days", "> 30 Days", "", ""), hjust = c(-1.5, -1.2))
+```
+```{r}
+aov_30 <- aov(logN1quant ~ cat30 * Sample, data = data_pos_all)
+summary(aov_30)
+```
+\pagebreak
+
+\textbf{45 Days}
+
+N1 Quantity comparison from positive specimens collected less than 45 days apart (left) and more than 
+45 days apart (right).
+\begin{itemize}
+\item A decrease in RNA copies, on average, is seen in specimens collected less than 45 days apart and an increase is seen, on average, in specimens more than 45 days apart
+\end{itemize}
+```{r}
+plot_less45 <- data_pos_all %>%
+  filter(cat45 == "<= 45 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none") #remove legend
+  
+plot_more45 <- data_pos_all %>%
+  filter(cat45 == "> 45 days") %>%
+  ggplot(aes(Sample, `logN1quant`, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none")
+```
+```{r}
+#add histograms for less than and more than 30 days to show distribution of time since first positive
+plot_hist_less45 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat45 == "<= 45 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 3) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive',
+       y = "") + 
+  scale_x_continuous(breaks = seq(0, 45, by = 6)) +
+  scale_y_continuous(breaks = seq(0, 40, by = 20)) 
+
+plot_hist_more45 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat45 == "> 45 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 60) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive', 
+       y = "") +
+  scale_x_continuous(breaks = seq(45, 600, by = 120)) +
+  scale_y_continuous(breaks = seq(0, 8, by = 4)) 
+
+#multiple in one fig 
+ggarrange(plot_hist_less45, plot_hist_more45, plot_less45, plot_more45, heights = c(1,3), labels = c("<= 45 Days", "> 45 Days", "", ""), hjust = c(-1.5, -1.2))
+```
+```{r}
+aov_45 <- aov(logN1quant ~ cat45 * Sample, data = data_pos_all)
+summary(aov_45)
+```
+\pagebreak
+
+\textbf{60 Days}
+
+N1 Quantity comparison from positive specimens collected less than 60 days apart (left) and more than 
+60 days apart (right).
+\begin{itemize}
+\item A decrease in RNA copies, on average, is seen in specimens collected less than 60 days apart and an increase is seen, on average, in specimens more than 60 days apart
+\end{itemize}
+```{r}
+plot_less60 <- data_pos_all %>%
+  filter(cat60 == "<= 60 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none") #remove legend
+  
+plot_more60 <- data_pos_all %>%
+  filter(cat60 == "> 60 days") %>%
+  ggplot(aes(Sample, `logN1quant`, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none")
+```
+```{r}
+#add histograms for less than and more than 30 days to show distribution of time since first positive
+plot_hist_less60 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat60 == "<= 60 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 4) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive',
+       y = "") + 
+  scale_x_continuous(breaks = seq(0, 60, by = 8)) +
+  scale_y_continuous(breaks = seq(0, 40, by = 20)) 
+
+plot_hist_more60 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat60 == "> 60 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 60) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive', 
+       y = "") +
+  scale_x_continuous(breaks = seq(60, 600, by = 120)) #+
+  #scale_y_continuous(breaks = seq(0, 8, by = 4)) 
+
+#multiple in one fig 
+ggarrange(plot_hist_less60, plot_hist_more60, plot_less60, plot_more60, heights = c(1,3), labels = c("<= 60 Days", "> 60 Days", "", ""), hjust = c(-1.5, -1))
+```
+```{r}
+aov_60 <- aov(logN1quant ~ cat60 * Sample, data = data_pos_all)
+summary(aov_60)
+```
+\pagebreak
+
+\textbf{90 Days}
+
+N1 Quantity comparison from positive specimens collected less than 90 days apart (left) and more than 
+90 days apart (right).
+\begin{itemize}
+\item A decrease in RNA copies, on average, is seen in specimens collected less than 90 days apart and an increase is seen, on average, in specimens more than 30 days apart
+\end{itemize}
+```{r}
+plot_less90 <- data_pos_all %>%
+  filter(cat90 == "<= 90 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none") #remove legend
+  
+plot_more90 <- data_pos_all %>%
+  filter(cat90 == "> 90 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none")
+```
+```{r}
+#add histograms for less than and more than 90 days to show distribution of time since first positive
+plot_hist_less90 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat90 == "<= 90 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 6) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive',
+       y = "") 
+
+plot_hist_more90 <- data_pos_all %>%
+  filter(time != 0) %>%
+  filter(cat90 == "> 90 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 60) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive', 
+       y = "") 
+
+#multiple in one fig 
+ggarrange(plot_hist_less90, plot_hist_more90, plot_less30, plot_more90, heights = c(1,3), labels = c("<= 90 Days", "> 90 Days", "", ""), hjust = c(-1.5, -1))
+```
+```{r}
+aov_90 <- aov(logN1quant ~ cat90 * Sample, data = data_pos_all)
+summary(aov_90)
+```
+
+\pagebreak
+
+\textbf{90 Days - Effect of Sex}
+
+N1 Quantity comparison from positive specimens collected less than 90 days apart (left) and more than 
+90 days apart (right) separated by sex.
+\begin{itemize}
+\item A similar decrease in RNA copies, on average, is seen in specimens collected less than 90 days apart for both females and males. There are not enough data points when separated by sex for meaningful interpretation of positives taken more than 90 days apart.
+\end{itemize}
+```{r}
+plot_less90_sex <- data_pos_all %>%
+  filter(cat90 == "<= 90 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_count, geom = "text", hjust = 0.5, vjust = 0.85, size = 3) +
+    labs(#can also add title, subtitle and/or caption
+         title = "<= 90 days", 
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    facet_wrap(~Sex) +
+    theme_cowplot(font_size = 10) +
+    theme(legend.position = "none") #remove legend
+  
+plot_more90_sex <- data_pos_all %>%
+  filter(cat90 == "> 90 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_count, geom = "text", hjust = 0.5, vjust = 0.85, size = 3) +
+    labs(#can also add title, subtitle and/or caption
+         title = "> 90 days", 
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    facet_wrap(~Sex) +
+    theme_cowplot(font_size = 10) +
+    theme(legend.position = "none")
+
+
+#multiple in one fig 
+ggarrange(plot_less90_sex, plot_more90_sex)
+```
+```{r}
+aov_90_sex <- aov(logN1quant ~ cat90 + Sample + Sex, data = data_pos_all)
+summary(aov_90_sex)
+```
+\pagebreak
+
+\textbf{Effect of Vaccine Status}
+
+N1 Quantity comparison from positive specimens collected from non-vaccinated and fully vaccinated individuals. This includes N1 data for patients with only one positive specimen in the dataset. \newline
+```{r}
+plot_vax <- data_pos_all %>%
+  filter(COVID_Vaccine_given == "No" | COVID_Vaccine_given == "Yes") %>%
+  ggplot(aes(COVID_Vaccine_given, logN1quant, fill = COVID_Vaccine_given)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+         title = "",
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none") #remove legend
+
+plot_vax
+```
+```{r}
+aov_vax <- aov(logN1quant ~ COVID_Vaccine_given, data = data_pos_all)
+summary(aov_vax)
+```
+\pagebreak
+
+\textbf{90 days - Effect of Vaccine Status}
+
+N1 Quantity comparison from positive specimens collected less than 90 days apart (left) and more than 
+90 days apart (right) separated by vaccine status. Not enough data for meaningful comparison.
+```{r}
+plot_less90_vax <- data_pos_all %>%
+  filter(cat90 == "<= 90 days") %>%
+  filter(COVID_Vaccine_given == "No" | COVID_Vaccine_given == "Yes") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_count, geom = "text", hjust = 0.5, vjust = 0.85, size = 3) +
+    labs(#can also add title, subtitle and/or caption
+         title = "<= 90 days", 
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot(font_size = 10) +
+    theme(plot.title = element_text(size = 16)) +
+    facet_wrap(~COVID_Vaccine_given)+
+    theme(legend.position = "none") #remove legend
+    
+plot_more90_vax <- data_pos_all %>%
+  filter(cat90 == "> 90 days") %>%
+  filter(COVID_Vaccine_given == "No" | COVID_Vaccine_given == "Yes") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_count, geom = "text", hjust = 0.5, vjust = 0.85, size = 3) +
+    labs(#can also add title, subtitle and/or caption
+         title = "> 90 days", 
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot(font_size = 10) +
+    theme(plot.title = element_text(size = 16)) +
+    facet_wrap(~COVID_Vaccine_given) +
+    theme(legend.position = "none") #remove legend
+
+ggarrange(plot_less90_vax, plot_more90_vax)
+```
+```{r}
+aov_90_vax <- aov(logN1quant ~ cat90 + COVID_Vaccine_given + Sex, data = data_pos_all)
+summary(aov_90_vax)
+```
+\pagebreak
+
+\textbf{14 Days - Effect of Age}
+
+N1 Quantity comparison from positive specimens collected less than 14 days apart (left) and more than 
+14 days apart (right) separated by age. There was not enough data more than 90 days apart to try with 90.
+\begin{itemize}
+\item The only age group with enough data for a meaningful comparison is 20-29. This shows the same trend seen without the separation by age. 
+\end{itemize}
+```{r}
+plot_less14_age <- data_pos_all %>%
+  filter(cat14 == "<= 14 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_count, geom = "text", hjust = 0.5, vjust = 0.85, size = 3) +
+    labs(#can also add title, subtitle and/or caption
+         title = "<= 14 days", 
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot(font_size = 10) +
+    theme(plot.title = element_text(size = 16)) +
+    facet_wrap(~agegroup)+
+    theme(legend.position = "none") #remove legend
+    
+plot_more14_age <- data_pos_all %>%
+  filter(cat14 == "> 14 days") %>%
+  ggplot(aes(Sample, logN1quant, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_count, geom = "text", hjust = 0.5, vjust = 0.85, size = 3) +
+    labs(#can also add title, subtitle and/or caption
+         title = "> 14 days", 
+         y = "log(N1 Quantity)",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot(font_size = 10) +
+    theme(plot.title = element_text(size = 16)) +
+    facet_wrap(~agegroup) +
+    theme(legend.position = "none") #remove legend
+
+ggarrange(plot_less14_age, plot_more14_age)
+```
+```{r}
+aov_14_age <- aov(logN1quant ~ cat14 + Sample + Age, data = data_pos_all)
+summary(aov_14_age)
+```
+\pagebreak
+
+\textbf{Ct Comparison, including flu/sc2 data}
+
+Ct comparison from positive specimens collected less than 14 days apart (left) and more than 
+14 days apart (right). Ct is N1 Ct from previous data as well as Sc2 Ct from the flu/sc2 assay for specimens that did not have N1 data available. This added an additional 5 participants with multiple positives.
+```{r}
+#additional column with Ct = N1 if available, otherwise Sc2
+#should be 639 previous positives + 68 new = 707 -10 non matching
+data_Ct <- data_all %>%
+  mutate(Ct = ifelse(is.na(N1), FluSc2_Ct, N1)) %>%
+  filter(Ct > 0)  %>%
+  mutate(N2 = ifelse(is.na(N2), 60, N2)) %>% #have to do this to get filter to work. don't know why 
+  filter(N2 != 0) %>%                        #remove inconclusives (pos N1 neg N2)
+  mutate(N2 = ifelse(N2 == 60, is.na(N2), N2)) %>%
+  filter(!is.na(pat_id)) #remove non matching ids
+
+new_data <- data_Ct %>%
+  filter(!is.na(FluSc2_Ct))
+  
+```
+
+```{r}
+#repeat analysis with Cts
+
+#count number of positive specimens for each pat_id, 211 patients
+#remove those with only 1
+data_count_Ct <- data_Ct %>%
+  count(pat_id) %>%
+  filter(n != 1) #filter more than one pos per patient
+
+#df with only pat_ids with data count >1, 448 specimens
+data_pos_mult_Ct <- data_Ct %>%
+  filter(pat_id %in% data_count_Ct$pat_id)
+
+#pivot to determine all collection dates for each pat_id with more than one pos
+#460 patients, including those with only one positive
+data_wide_Ct <- data_Ct %>%
+  group_by(pat_id) %>%
+  arrange(Collection_date) %>%
+  mutate(id_rows = row_number()) %>%
+  pivot_wider(  #Select each Collection date from each row for each pat_id in pivot table
+    id_cols = c(pat_id),
+    names_from = id_rows,
+    values_from = Collection_date,
+    names_prefix = "Positive") 
+
+#Only 1 collection date, 249 patients
+data_wide_1_Ct <- data_wide_Ct %>%
+  filter(is.na(Positive2))
+
+#Consider 2nd collection date, 211 patients
+data_wide_2_Ct <- data_wide_Ct %>%
+  filter(!is.na(Positive2)) %>%
+  mutate(time1_2 = difftime(Positive2, Positive1, units="days"), #days between 1st and 2nd coll date
+         cat14 = case_when(time1_2 <= 14 ~ "<= 14 days",          
+                           time1_2 > 14 ~ "> 14 days"),          #categorize by < or > 14 between 1st and 2nd coll date
+         cat30 = case_when(time1_2 <= 30 ~ "<= 30 days",          
+                           time1_2 > 30 ~ "> 30 days"),          #categorize by < or > 30 between 1st and 2nd coll date
+         cat90 = case_when(time1_2 <= 90 ~ "<= 90 days",
+                           time1_2 > 90 ~ "> 90 days"))          #categorize by < or > 90 between 1st and 2nd coll date
+
+#Consider 3rd collection date, 21 p
+data_wide_3_Ct <- data_wide_Ct %>%
+  filter(!is.na(Positive3)) %>%
+  mutate(time1_3 = difftime(Positive3, Positive1, units="days"), #days between 1st and 3rd coll date
+         cat14 = case_when(time1_3 <= 14 ~ "<= 14 days",          
+                           time1_3 > 14 ~ "> 14 days"),          #categorize by < or > 14 between 1st and 2nd coll date
+         cat30 = case_when(time1_3 <= 30 ~ "<= 30 days",          
+                           time1_3 > 30 ~ "> 30 days"),          #categorize by < or > 30 between 1st and 2nd coll date
+         cat90 = case_when(time1_3 <= 90 ~ "<= 90 days",
+                           time1_3 > 90 ~ "> 90 days"))          #categorize by < or > 90 between 1st and 2nd coll date
+
+#Consider 4th collection date, 4 p
+data_wide_4_Ct <- data_wide_Ct %>%
+  filter(!is.na(Positive4)) %>%
+  mutate(time1_4 = difftime(Positive4, Positive1, units="days"), #days between 1st and 4th coll date
+         cat14 = case_when(time1_4 <= 14 ~ "<= 14 days",          
+                           time1_4 > 14 ~ "> 14 days"),          #categorize by < or > 14 between 1st and 2nd coll date
+         cat30 = case_when(time1_4 <= 30 ~ "<= 30 days",          
+                           time1_4 > 30 ~ "> 30 days"),          #categorize by < or > 30 between 1st and 2nd coll date
+         cat90 = case_when(time1_4 <= 90 ~ "<= 90 days",
+                           time1_4 > 90 ~ "> 90 days"))          #categorize by < or > 90 between 1st and 2nd coll date
+
+
+#Consider 5th collection date, 1 p
+data_wide_5_Ct <- data_wide_Ct %>%
+  filter(!is.na(Positive5)) %>%
+  mutate(time1_5 = difftime(Positive5, Positive1, units="days"), #days between 1st and 5th coll date
+         cat14 = case_when(time1_5 <= 14 ~ "<= 14 days",          
+                           time1_5 > 14 ~ "> 14 days"),          #categorize by < or > 14 between 1st and 2nd coll date
+         cat30 = case_when(time1_5 <= 30 ~ "<= 30 days",          
+                           time1_5 > 30 ~ "> 30 days"),          #categorize by < or > 30 between 1st and 2nd coll date
+         cat90 = case_when(time1_5 <= 90 ~ "<= 90 days",
+                           time1_5 > 90 ~ "> 90 days"))          #categorize by < or > 90 between 1st and 2nd coll date
+
+#connect positive number and category back to og data
+data_pos_1_Ct <- left_join(data_wide_1_Ct, data_Ct, by = "pat_id") %>%
+  mutate(Positive = 1)
+
+data_pos_2_Ct <- left_join(data_wide_2_Ct, data_Ct, by = "pat_id") %>% 
+  mutate(Positive = ifelse(Collection_date == Positive2, 2, 
+                           ifelse(Collection_date == Positive1, 1, NA))) %>%
+  filter(!is.na(Positive)) #keep only pos 1 and 2
+
+data_pos_3_Ct <- left_join(data_wide_3_Ct, data_Ct, by = "pat_id") %>%
+  mutate(Positive = ifelse(Collection_date == Positive3, 3, NA)) %>% #create category to order positives per pat_id 
+  filter(Positive == 3) #keep only pos 3 (1 and 2 already accounted for)
+
+data_pos_4_Ct <- left_join(data_wide_4_Ct, data_Ct, by = "pat_id") %>%
+  mutate(Positive = ifelse(Collection_date == Positive4, 4, NA)) %>% #create category to order positives per pat_id 
+  filter(Positive == 4) #keep only pos 4 (1,2,3 already accounted for)
+  
+data_pos_5_Ct <- left_join(data_wide_5_Ct, data_Ct, by = "pat_id") %>%
+  mutate(Positive = ifelse(Collection_date == Positive5, 5, NA)) %>% #create category to order positives per pat_id 
+  filter(Positive == 5) #keep only pos 5 (1,2,3,4 already accounted for)
+ 
+
+data_pos_all_Ct <- data_pos_1_Ct %>% #bind all types of positives back together, 675 specimens. Should be 629 + 68 = 697
+  bind_rows(data_pos_2_Ct) %>%
+  #bind_rows(data_pos_3_Ct) %>%
+  #bind_rows(data_pos_4_Ct) %>%
+  #bind_rows(data_pos_5_Ct) %>%
+  mutate(Sample = ifelse(Collection_date == Positive1, "First", "Second")) %>% #categorize by 1st and 2nd pos
+  mutate(time = ifelse(Positive == 1, 0,
+                       ifelse(!is.na(time1_2), time1_2,
+                               #ifelse(!is.na(time1_3), time1_3, 
+                                      #ifelse(!is.na(time1_4), time1_4,
+                                             #ifelse(!is.na(time1_5), time1_5, 
+                              NA)))
+
+```
+
+```{r}
+#function to calculate stats to add to plot
+#upper_limit multiplier gives more space on y axis of plot to fit stat summary
+#Mean and stdev rounded to 1 decimal point
+
+get_box_stats_sc2 <- function(y, upper_limit = max(data_pos_all_Ct$Ct) * 1.2) {
+  return(data.frame(
+    y = upper_limit,
+    label = paste(
+      "Count =", length(y), "\n",
+      "Mean =", round(mean(y), 1), "\n",
+      "Med =", round(median(y), 1), "\n")))
+}
+
+#just count
+get_box_count_sc2 <- function(y, upper_limit = max(data_pos_all_Ct$Ct) * 1.1) {
+  return(data.frame(
+    y = upper_limit,
+    label = paste(length(y))))
+}
+```
+\textbf{14 Days}
+
+Ct comparison from positive specimens collected less than 14 days apart (left) and more than 
+14 days apart (right). Includes N1 and flu/sc2 Cts.
+\begin{itemize}
+\item An increase in Ct, on average, is seen in both specimens collected less than 14 days apart and more than 
+14 days apart. (34 more specimens included with flu/sc2 Ct)
+\end{itemize}
+
+```{r}
+#plot all specimens <= 14 days apart grouped and colored by "Sample" (1st or subsequent positive)
+plot_less14_sc2 <- data_pos_all_Ct %>%
+  filter(cat14 == "<= 14 days") %>%
+  ggplot(aes(Sample, Ct, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") + #line between same pat_id
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) + #point for each sample
+    stat_summary(fun.data = get_box_stats_sc2, 
+                 geom = "text", hjust = 0.5, vjust = 0.85) + #stats from function get_box_stats
+    labs(y = "Ct",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 40, by = 5)) + #min, max and ticks of y axis
+    theme_cowplot() +
+    theme(legend.position = "none") #remove legend
+
+#plot all specimens > 14 days apart
+plot_more14_sc2 <- data_pos_all_Ct %>%
+  filter(cat14 == "> 14 days") %>%
+  ggplot(aes(Sample, Ct, fill = Sample)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats_sc2, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs( y = "Ct",
+          x = "") +
+    scale_y_continuous(breaks = seq(0, 40, by = 5)) +
+    theme_cowplot() +
+    theme(legend.position = "none")
+```
+```{r}
+#add histograms for less than and more than 14 days to show distribution of time since first positive
+plot_hist_less14_sc2 <- data_pos_all_Ct %>%
+  filter(time != 0) %>%
+  filter(cat14 == "<= 14 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 1) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive',
+       y = "")  +
+  scale_y_continuous(breaks = seq(0, 40, by = 20), limits = c(0,40))
+
+plot_hist_more14_sc2 <- data_pos_all_Ct %>%
+  filter(time != 0) %>%
+  filter(cat14 == "> 14 days") %>%
+  ggplot(aes(time)) +
+      geom_histogram(binwidth = 60) +
+  theme_cowplot(font_size = 10) +
+  labs(x = 'Days since first positive', 
+       y = "") +
+  scale_x_continuous(breaks = seq(0, 800, by = 120)) +
+  scale_y_continuous(breaks = seq(0, 40, by = 20)) 
+
+#multiple in one fig 
+ggarrange(plot_hist_less14_sc2, plot_hist_more14_sc2, plot_less14_sc2, plot_more14_sc2, heights = c(1,3), labels = c("<= 14 Days", "> 14 Days", "", ""), hjust = c(-1.5, -1.7))
+```
+```{r}
+aov_14_sc2 <- aov(Ct ~ cat14 + Sample, data = data_pos_all_Ct)
+summary(aov_14_sc2)
+```
+\pagebreak
+
+\textbf{Effect of Vaccine Status}
+
+Ct comparison from positive specimens collected from non-vaccinated and fully vaccinated individuals. This includes N1 and flu/sc2 Ct data for patients with only one positive specimen in the dataset and multiple positives. (18 additional specimens with only flu/sc2 data and no N1) \newline
+```{r}
+plot_vax_sc2 <- data_pos_all_Ct %>%
+  filter(COVID_Vaccine_given == "No" | COVID_Vaccine_given == "Yes") %>%
+  ggplot(aes(COVID_Vaccine_given, Ct, fill = COVID_Vaccine_given)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = pat_id), position = position_dodge(0.5), color = "gray") +
+    geom_point(aes(group = pat_id), size=1.5, shape=21, position = position_dodge(0.5)) +
+    stat_summary(fun.data = get_box_stats_sc2, geom = "text", hjust = 0.5, vjust = 0.85) +
+    labs(#can also add title, subtitle and/or caption
+         title = "",
+         y = "Ct",
+         x = "") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_cowplot() +
+    theme(legend.position = "none") #remove legend
+
+plot_vax_sc2
+```
+```{r}
+aov_vax_sc2 <- aov(Ct ~ COVID_Vaccine_given, data = data_pos_all_Ct)
+summary(aov_vax_sc2)
+```
+```{r, warnings = FALSE}
+plot_date <- data_pos_all_Ct %>%
+  filter(!is.na(Positive2)) %>%
+  ggplot(aes(x = Positive1, y = Positive2)) +
+      geom_point(aes(x = Positive1, y = Positive2, color = cat90)) +
+      #geom_point(aes(x = Positive1, y = Positive3, color = cat90)) +
+      #geom_point(aes(x = Positive1, y = Positive4, color = cat90)) +
+      #geom_point(aes(x = Positive1, y = Positive5, color = cat90)) +
+      #geom_line(aes(group = pat_id), color = "gray") +
+      labs(y = "Collection Date of Second Positive ",
+          x = "Collection Date of First Positive",
+          color = "Time difference") +
+      theme_cowplot()
+
+
+plot_date
+```
+
+

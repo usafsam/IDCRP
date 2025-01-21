@@ -1,0 +1,321 @@
+---
+title: EPICC Rerun of SW Quadrant Outliers
+subtitle: Specimens with low N1 Ct (<28) and low percent genome coverage at 20x (<80%)
+author: "Vivian Hogan"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+```{r setup, include=FALSE}
+
+#Load libraries
+library(knitr)
+library(tidyverse)
+library(dplyr)  
+library(readr)
+library(viridis)
+library(plotly)
+library(ggplot2)
+library(ggpubr)
+library(readxl)
+library(purrr)
+library(DT)
+library(RColorBrewer)
+library(eply) #unquote() function
+knitr::opts_chunk$set(echo = FALSE)
+```
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#load file
+raw_data <- read_excel(path = "/Users/vivian/EPICC/SW_Rerun/SW_Reruns_01Jun22.xlsx") 
+
+data<-raw_data %>%
+  mutate(N1diff = (OriginalN1-RerunsN1)/OriginalN1*100) %>%
+  mutate(N1diff = signif(N1diff, 3)) %>%
+  mutate(N1diff_abs = abs(N1diff)) %>%
+  mutate(N2diff = (OriginalN2-RerunsN2)/OriginalN2*100) %>%
+  mutate(N2diff = signif(N2diff, 3)) %>%
+  mutate(N2diff_abs = abs(N2diff)) %>%
+  mutate(RPdiff = (OriginalRP-RerunsRP)/OriginalRP*100) %>%
+  mutate(RPdiff = signif(RPdiff, 3)) %>%
+  mutate(RPdiff_abs = abs(RPdiff))
+```
+<br>
+<br>
+
+### <span style="color: blue;">Ct Comparison between original data and rerun</span>
+##### <span style="color: gray;">Overall specimen Cts for N1, N2, and Rp increased 2-3 Ct on average. Some N1 and N2 Cts dropped to zero. This explains the low genome coverage due to specimens actually being negative and original RT-PCR data being incorrect.</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Create violin plot with each run/Ct type as individual trace. Use x0 to define location of traces on x axis
+
+Ct_violin <- raw_data %>%
+  plot_ly(y=~OriginalN1,x0 ='N1') %>% #Original N1
+          add_trace(type = 'violin',
+          name = 'Original N1 Ct',
+          mode = 'markers',
+          color = I("darkorchid4"),
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          text = raw_data$SampleID, 
+          hoverinfo = 'text') %>%
+  
+  add_trace(y=~RerunsN1, x0 = 'N1', #Rerun N1
+          name = 'Rerun N1 Ct',
+          type = 'violin', 
+          mode = 'markers',
+          color = I("darkorchid"),
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          text = raw_data$SampleID, 
+          hoverinfo = 'text') %>%
+  
+    add_trace(y=~OriginalN2, x0 = 'N2', #Original N2
+          name = 'Origianl N2 Ct',
+          type = 'violin', 
+          mode = 'markers',
+          color = I("deeppink4"),
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          text = raw_data$SampleID, 
+          hoverinfo = 'text') %>%
+          
+    add_trace(y=~RerunsN2, x0 = 'N2', #Rerun N2
+          name = 'Rerun N2 Ct',
+          type = 'violin', 
+          mode = 'markers',
+          color = I("deeppink"),
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          text = raw_data$SampleID, 
+          hoverinfo = 'text') %>%
+  
+    add_trace(y=~OriginalRP, x0 = 'Rp', #Original Rp
+          name = 'Original Rp Ct',
+          type = 'violin', 
+          mode = 'markers',
+          color = I("deepskyblue4"),
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          text = raw_data$SampleID, 
+          hoverinfo = 'text') %>%
+          
+    add_trace(y=~RerunsRP, x0 = 'Rp', #Rerun Rp
+          name = 'Rerun Rp Ct',
+          type = 'violin', 
+          mode = 'markers',
+          color = I("deepskyblue"),
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          text = raw_data$SampleID, 
+          hoverinfo = 'text') %>%
+  
+  layout(title ='Ct distribution',
+         yaxis = list(title = 'Ct', 
+                      range=list(0,40)))
+         
+Ct_violin
+```
+<br>
+
+##### <span style="color: gray;">Scatter plot comparing original and rerun Ct values shows that many of the N1 Cts fall above 28 on the rerun, thus explaining the poor genome coverage for these specimens. Specimens with the largest change in Ct (shown by larger dots) mostly have become negative on the rerun and one specimen changes signficantly from Ct 15 to 35.</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Create scatter plot comparing Ct values for original and rerun. One trace for N1, N2, and Rp
+
+Ct_scatter <- data %>%
+  plot_ly(x = ~OriginalN1, y = ~RerunsN1) %>%
+  add_trace(type = 'scatter',
+          mode = 'markers',
+          name = 'N1',
+          size = ~N1diff_abs,
+          color = I("darkorchid"),
+          text = ~paste('</br>', SampleID, '</br>Percent Difference: ', N1diff), 
+          hoverinfo = 'text') %>%
+  
+  add_trace(x = ~OriginalN2, y = ~RerunsN2,
+          type = 'scatter',
+          mode = 'markers',
+          name = 'N2',
+          size = ~N2diff_abs,
+          color = I("deeppink"),
+          text = ~paste('</br>', SampleID, '</br>Percent Difference: ', N2diff), 
+          hoverinfo = 'text') %>%
+  
+  add_trace(x = ~OriginalRP, y = ~RerunsRP,
+          type = 'scatter',
+          mode = 'markers',
+          name = 'RP',
+          size = ~RPdiff_abs,
+          color = I("deepskyblue"),
+          text = ~paste('</br>', SampleID, '</br>Percent Difference: ', RPdiff), 
+          hoverinfo = 'text') %>%
+  
+  layout(title ='Ct Comparison',
+         autosize = F, width = 500, height = 500,
+         legend = list(x=.1, y=.1),
+         yaxis = list(title = '2nd RTPCR Ct', 
+                      range=list(0,40),
+                      tickvals = seq(0, 40, 5)),
+         xaxis = list(title = '1st RTPCR Ct', 
+                      range=list(0,40), 
+                      tickvals = seq(0, 40, 5)))
+
+Ct_scatter
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#load file- with sequence comparison
+seq_data <- read_excel(path = "/Users/vivian/EPICC/SW_Rerun/SW_Comparison_07Jun22.xlsx") %>%
+  mutate(`Rerun.%>=20x` = as.numeric(`Rerun.%>=20x`)) %>%
+  mutate(N.clade = unquote(N.clade)) #remove quotes from entries in this column so it can be directly compared to rerun clade
+```
+<br>
+
+### <span style="color: blue;">N1 Ct vs Percent Genome at 20x - Original and Rerun</span>
+##### <span style="color: gray;">Rerun values of N1 and percent genome now mostly fall in to the expected range with either a higher or negative N1 or better percent genome. Of the 67 specimens reran within this quadrant, 10 became negative on the rerun, and only 3 remained outliers within the range of N1 less than 28 and percent genome less than 80. These are listed below the plot. One outlier has ~60% coverage even though it is negative. 34 specimens had good coverage (greater than 80%) and the rest had N1 Cts greater than 28. Overall the rerun data follows the expected trend of percent coverage fall off with Ct > 28 and specimens with Ct < 28 obtaining good coverage much better than the origianl data.</span>
+<br>
+
+##### <span style="color: red;">What data should be kept in the EPICC database?</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Create plot for N1 vs percent genome with a trace for original data, reruns, and outliers in reruns (still N1<28 and coverage <80)
+
+#Define remaining outliers
+rerun_outliers <- seq_data %>%
+  filter(Rerun.N1 <28 & `Rerun.%>=20x` <80) %>%
+  arrange(Rerun.N1)
+
+#plot
+N1_genome <- seq_data %>%
+  plot_ly(x = ~Data.N1, y = ~`Seq.%>=20x`) %>%
+  add_trace(type = 'scatter',
+          mode = 'markers',
+          name = 'Original',
+          color = I("darkorchid"),
+          text = ~SampleID, 
+          hoverinfo = 'text') %>%
+  
+    add_trace(x = ~Rerun.N1, y = ~`Rerun.%>=20x`,
+          type = 'scatter',
+          mode = 'markers',
+          name = 'Rerun',
+          color = I("deeppink"),
+          text = ~SampleID, 
+          hoverinfo = 'text') %>%
+  
+   add_trace(x = rerun_outliers$Rerun.N1, y = ~rerun_outliers$`Rerun.%>=20x`,
+          type = 'scatter',
+          mode = 'markers',
+          name = 'Remaining SW Outliers',
+          marker = list(color = "#00FF00", symbol = 'star-square-open'),
+          text = rerun_outliers$SampleID, 
+          hoverinfo = 'text') %>%
+  
+    layout(title ='Comparison of N1 vs Percent Genomes at 20x',
+         xaxis = list(title = 'N1 Ct', 
+                      range=list(0,40),
+                      tickvals = seq(0, 40, 5)),
+         yaxis = list(title = 'Percent Genome at 20x', 
+                      range=list(0,100), 
+                      tickvals = seq(0, 100, 10)))
+  
+N1_genome
+```
+<br>
+
+#### <span style="color: blue;">Remaining outliers and specimens that became negative on rerun</span>
+##### <span style="color: gray;">Num 11-13 are the weird ones</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Output datatable with outliers from rerun
+disp_rerun_outliers <- rerun_outliers %>%
+  select(SampleID, Rerun.N1, Rerun.N2, `Rerun.%>=20x`, Data.N1, Data.N2, `Seq.%>=20x`)
+
+DT::datatable(disp_rerun_outliers, options(list(paging=T, pageLength = 10)),
+              colnames = c("Sample ID", "Rerun N1", "Rerun N2", "Rerun %>=20x", "Original N1", "Original N2", "Original %>=20x"))
+```
+<br>
+
+### <span style="color: blue;">Percent Genome at 20x - Original and Rerun</span>
+##### <span style="color: gray;">We would expect reruns to follow a fairly linear trend over the diagonal x=y but instead we see basically no trend. There is a cluster of specimens in the upper left that had near 0 coverage on the original run and >90 on the second run. There is also a cluster on the bottom right where speciemns have near 0 coverage on both runs. Otherwise speciemns are fairly evenly spread with a mixture of better coverage, worse coverage, or similar coverage across the two runs.</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Scatter plot for percent genome
+
+#plot
+genome_scatter <- seq_data %>%
+  plot_ly(x = ~`Seq.%>=20x`, y = ~`Rerun.%>=20x`) %>%
+  add_trace(type = 'scatter',
+          mode = 'markers',
+          color = I("darkorchid"),
+          text = ~SampleID, 
+          hoverinfo = 'text') %>%
+  
+    layout(title ='Comparison of Percent Genomes at 20x',
+         autosize = F, width = 500, height = 500,
+         legend = list(x=.1, y=.1),
+         xaxis = list(title = 'Original Percent Genome at 20x', 
+                      range=list(0,100),
+                      tickvals = seq(0, 100, 10)),
+         yaxis = list(title = 'Original Percent Genome at 20x', 
+                      range=list(0,100), 
+                      tickvals = seq(0, 100, 10)))
+  
+genome_scatter
+```
+<br>
+
+#### <span style="color: blue;">Specimens with improved coverage on rerun </span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Output datatable with better genome from rerun
+disp_rerun_better <- seq_data %>%
+  mutate(change_20x = `Rerun.%>=20x` - `Seq.%>=20x`) %>%
+  filter(change_20x > 0) %>%
+  arrange(-change_20x) %>%
+  select(SampleID, Rerun.N1, Rerun.N2, `Rerun.%>=20x`, Data.N1, Data.N2, `Seq.%>=20x`, change_20x)
+
+DT::datatable(disp_rerun_better, options(list(paging=T, pageLength = 25)),
+              colnames = c("Sample ID", "Rerun N1", "Rerun N2", "Rerun %>=20x", "Original N1", "Original N2", "Original %>=20x", "20x % Change"))
+
+#write.csv(disp_rerun_better, file="/Users/vivian/EPICC/SW_Rerun/SW_better_genome.csv", row.names=FALSE)
+```
+<br>
+
+#### <span style="color: blue;">Specimens change in Scorpio Call</span>
+##### <span style="color: gray;">Five specimens received a scorpio call that did not get one from original data. Five specimens had a scorpio call in original data and not in rerun. All specimens that had a scorpio call in both original data and rerun stayed the same.</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Output datatable with better genome from rerun
+disp_rerun_scorpio <- seq_data %>%
+  filter((is.na(P.scorpio_call) & !is.na(Rerun.scorpio_call) | (!is.na(P.scorpio_call) & is.na(Rerun.scorpio_call)))) %>%
+  select(SampleID, `Rerun.%>=20x`, Rerun.scorpio_call, `Seq.%>=20x`, P.scorpio_call)
+
+DT::datatable(disp_rerun_scorpio, options(list(paging=T, pageLength = 25)),
+              colnames = c("Sample ID", "Rerun %>=20x", "Rerun Scorpio Call", "Original %>=20x", "Original Scorpio Call"))
+```
+<br>
+
+#### <span style="color: blue;">Specimens change in Clade</span>
+##### <span style="color: gray;">10 specimens had a clade defined originally and not in the rerun. 13 (11 with good genome) had no clade originally and were assigned one in the rerun. 9 had clade assigned both times with a change in assignment on the rerun. But only 2 of these have good enough genome in the rerun to actually be trusted (#17 & #32)</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Output datatable with better genome from rerun
+disp_rerun_nextclade <- seq_data %>%
+  filter(is.na(N.clade) & !is.na(Rerun.clade) | !is.na(N.clade) & is.na(Rerun.clade) | N.clade != Rerun.clade) %>%
+  select(SampleID, `Rerun.%>=20x`, Rerun.clade, `Seq.%>=20x`, N.clade)
+
+DT::datatable(disp_rerun_nextclade, options(list(paging=T, pageLength = 10)),
+              colnames = c("Sample ID", "Rerun %>=20x", "Rerun Clade", "Original %>=20x", "Original Clade"))
+```

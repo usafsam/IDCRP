@@ -1,0 +1,1291 @@
+---
+title: "Taqman Mutant Panel Comparison to N1 Ct and Sequencing Results"
+author: "Vivian Hogan"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+```{r, libraries, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(cowplot)
+library(reshape2)
+library(ggpubr)
+library(plotly)
+library(DT)
+library(stringr)
+
+knitr::opts_chunk$set(echo = FALSE, fig.width=12, fig.height=6, fig.align = "center") #set figure size
+```
+```{r upload-wk48-data}
+#upload wk48 data
+wk48_data <- read_excel("/Users/vhogan/Documents/EPICC/Variant/Wk48_variant_07Dec22.xlsx", sheet = "data") %>%
+  replace(is.na(.), 0)  %>%
+  mutate(SampleID = toupper(SampleID))
+  
+
+#melts data for easy use in box plots
+wk48_data_mod <- melt(wk48_data, id.vars='SampleID', 
+                  measure.vars=c('SC2_Ct', 'C12880T-1', 'C12880T-2', 'D3N-1', 'D3N-2', 'G339D-1', 'G339D-2', 'T547K-1', 'T547K-2'))
+
+```
+```{r upload-wk49-data}
+#upload wk49 data
+wk49_data <- read_excel("/Users/vhogan/Documents/EPICC/Variant/Wk49_variant_14Dec22.xlsx", sheet = "data") %>%
+  replace(is.na(.), 0) %>%
+  mutate(SampleID = toupper(SampleID))
+
+#melts data for easy use in box plots - include N1 data
+wk49_data_mod <- melt(wk49_data, id.vars='SampleID', 
+                  measure.vars=c('SC2_Ct','N1', 'C12880T-1', 'C12880T-2', 'D3N-1', 'D3N-2', 'G339D-1', 'G339D-2'))
+
+```
+```{r upload-wk48-call-data}
+#upload data output from Design and Analysis sotware with call for each variant
+wk48_call_data <- read_excel("/Users/vhogan/Documents/EPICC/Variant/Variant_DesignAnalysis_Export_13dec22.xlsx", sheet = "wk48" ) 
+
+#pivot to clean data, just want sample IDs and calls
+#Should have same # as epicc_data (125)
+#Define mutations as wild, mutant, or no call
+
+wk48_call <- wk48_call_data %>%
+  pivot_wider(
+    id_cols = Sample,
+    names_from = `SNP Assay`,
+    values_from = Call
+  ) %>%
+  rename(SampleID = Sample) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  filter(!grepl('NTC', SampleID)) %>% #remove any NTCs
+  mutate(C12880T = ifelse(C12880T == "Undetermined"| C12880T == "No Amplification", "No Call",
+                         ifelse(C12880T == "C/C", "Wild",
+                                ifelse(C12880T == "T/T", "Mutant", "error")))) %>%
+  mutate(D3N = ifelse(D3N == "Undetermined"| D3N == "No Amplification", "No Call", 
+                      ifelse(D3N == "G/G", "Wild",
+                                ifelse(D3N == "A/A", "Mutant", "error")))) %>%
+  mutate(G339D = ifelse(G339D == "Undetermined"| G339D == "No Amplification", "No Call",
+                         ifelse(G339D == "G/G", "Wild",
+                                ifelse(G339D == "A/A", "Mutant", "error")))) %>%
+  mutate(T547K = ifelse(T547K == "Undetermined"| T547K == "No Amplification", "No Call",
+                         ifelse(T547K == "C/C", "Wild",
+                                ifelse(T547K == "A/A", "Mutant", "error"))))
+
+#join with other data, and separate for each group
+wk48_data_call <- left_join(wk48_data, wk48_call, by = 'SampleID')
+```
+```{r upload-wk49-call-data}
+#upload data output from Design and Analysis sotware with call for each variant
+wk49_call_data <- read.csv("/Users/vhogan/Documents/EPICC/Variant/Variant_wk49_DesignAnalysis_Export_14Dec22.csv") 
+
+#pivot to clean data, just want sample IDs and calls
+#Should have same # as epicc_data (125)
+#Define mutations as wild, mutant, or no call
+
+wk49_call <- wk49_call_data %>%
+  pivot_wider(
+    id_cols = Sample,
+    names_from = `SNP.Assay`,
+    values_from = Call
+  ) %>%
+  rename(SampleID = Sample) %>%
+  filter(!grepl('NTC', SampleID)) %>% #remove any NTCs
+  mutate(C12880T = ifelse(C12880T == "Undetermined"| C12880T == "No Amplification", "No Call",
+                         ifelse(C12880T == "C/C", "Wild",
+                                ifelse(C12880T == "T/T", "Mutant", "error")))) %>%
+  mutate(D3N = ifelse(D3N == "Undetermined"| D3N == "No Amplification", "No Call", 
+                      ifelse(D3N == "G/G", "Wild",
+                                ifelse(D3N == "A/A", "Mutant", "error")))) %>%
+  mutate(G339D = ifelse(G339D == "Undetermined"| G339D == "No Amplification", "No Call",
+                         ifelse(G339D == "G/G", "Wild",
+                                ifelse(G339D == "A/A", "Mutant", "error"))))
+
+#join with other data, and separate for each group
+wk49_data_call <- left_join(wk49_data, wk49_call, by = 'SampleID')
+```
+```{r upload-wk50-ct}
+#upload wk50 data
+wk50_data <- read_excel("/Users/vhogan/Documents/EPICC/Variant/wk50_flusc2_n1n2_comparison_29dec22.xlsx", sheet = "data") %>%
+  replace(is.na(.), 0) %>%
+  mutate(SampleID = toupper(SampleID))
+
+#melts data for easy use in box plots - include N1 data
+wk50_data_mod <- melt(wk50_data, id.vars='SampleID', 
+                  measure.vars=c('SC2_Ct_Viv', 'SC2_Ct','N1', 'N2'))
+
+wk50_data_rp <- melt(wk50_data, id.vars='SampleID', 
+                  measure.vars=c('RP_Ct_Viv', 'RP_Ct','RP'))
+
+```
+```{r wk50-plots}
+wk50_plot <- wk50_data_mod %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Week 50 Ct Comparison",
+          y = "Ct",
+          x = "Assay") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+wk50_plot
+
+wk50_rp_plot <- wk50_data_rp %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Week 50 RP Ct Comparison",
+          y = "Ct",
+          x = "Assay") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3")) +
+    theme(legend.position = "none") #remove legend
+ 
+wk50_rp_plot
+```
+```{r flusc2-data}
+#upload wk50 data
+flusc2_data <- read_excel("/Users/vhogan/Documents/EPICC/Variant/Flu-Sc2_data_wk9-50_MJR_VH.xlsx", sheet = "data") %>%
+  replace(is.na(.), 0) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SC2_Ct = ifelse(SC2_Ct == 0, NA, SC2_Ct)) %>% #replace 0 with na to remove from boxplot calculation
+  mutate(Week = str_remove(Week, "Week ")) %>% #remove the string Week to simplify visualization
+  mutate(Week = ifelse(Week == '9', '09', Week)) #change 9 to 09 to keep order when plotting
+
+
+flusc2_plot <- flusc2_data %>%
+  ggplot(aes(x = Week, y = SC2_Ct, fill = Week)) + 
+    geom_boxplot(alpha = 0.1) +
+    #geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    #geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Flu/Sc2 Sc2 Ct Comparison by Week",
+          y = "Ct",
+          x = "Week") +
+    theme_cowplot() +
+    theme(legend.position = "none",
+          axis.text.x = element_text(size = 10)) #remove legend
+
+flusc2_plot
+```
+
+```{r C12880T-wk48-plot}
+#plot SC2 Ct and C12880T mutation Cts - wk48
+wk48_ct_plot_C12880T <- wk48_data_mod %>%
+  filter(variable == "SC2_Ct" | variable == 'C12880T-1' | variable =='C12880T-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Week 48 C12880T",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("violetred","springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#wk48_ct_plot_C12880T
+```
+```{r C12880T-wk49-plot}
+#plot SC2 Ct and C12880T mutation Cts - wk 49
+wk49_ct_plot_C12880T <- wk49_data_mod %>%
+  filter(variable == "SC2_Ct" | variable == 'N1' | variable == 'C12880T-1' | variable =='C12880T-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Week 49 C12880T",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("violetred", "orange", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#wk49_ct_plot_C12880T
+```
+```{r D3n-wk48-plot}
+wk48_ct_plot_D3N <- wk48_data_mod %>%
+  filter(variable == "SC2_Ct" | variable == 'D3N-1' | variable =='D3N-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Week 48 D3N",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("violetred","springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#wk48_ct_plot_D3N
+```
+```{r D3N-wk49-plot}
+#plot SC2 Ct and D3N mutation Cts - wk 49
+wk49_ct_plot_D3N <- wk49_data_mod %>%
+  filter(variable == "SC2_Ct" | variable == 'N1' | variable == 'D3N-1' | variable =='D3N-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Week 49 D3N",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("violetred", "orange", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#wk49_ct_plot_D3N
+```
+```{r G339D-wk48-plot}
+wk48_ct_plot_G339D <- wk48_data_mod %>%
+  filter(variable == "SC2_Ct" | variable == 'G339D-1' | variable =='G339D-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Week 48 G339D",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("violetred","springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#wk48_ct_plot_G339D
+```
+```{r G339D-wk49-plot}
+#plot SC2 Ct and G339D mutation Cts - wk 49
+wk49_ct_plot_G339D <- wk49_data_mod %>%
+  filter(variable == "SC2_Ct" | variable == 'N1' | variable == 'G339D-1' | variable =='G339D-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Week 49 G339D",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("violetred", "orange", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#wk49_ct_plot_G339D
+```
+```{r T547K-wk48-plot}
+wk48_ct_plot_T547K <- wk48_data_mod %>%
+  filter(variable == "SC2_Ct" | variable == 'T547K-1' | variable =='T547K-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Week 48 T547K",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("violetred","springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#wk48_ct_plot_T547K
+```
+
+```{r upload-epicc-data}
+#upload epicc data
+epicc_data <- read_excel("/Users/vhogan/Documents/EPICC/Variant/Variant_Query_12dec22_2.xlsx")
+
+#filter just alpha-like variants
+alpha_data <- epicc_data %>%
+  filter(Group == "Alpha-like")
+
+#filter just omicron variants
+omicron_data <- epicc_data %>%
+  filter(Group == "Omicron")
+
+#filter just delta variants
+delta_data <- epicc_data %>%
+  filter(Group == "Delta-like")
+
+#melts data for easy use in box plots
+alpha_data_mod <- melt(alpha_data, id.vars = 'SampleID',
+                       measure.vars = c('Data.N1', 'Variant.N1', 'K417N-1', 'K417N-2', 'N501Y-1', 'N501Y-2'))
+
+omicron_data_mod <- melt(omicron_data, id.vars='SampleID', 
+                  measure.vars=c('Data.N1', 'Variant.N1', 'C12880T-1', 'C12880T-2', 
+                                 'D3N-1', 'D3N-2', 'G339D-1', 'G339D-2', 'Q493R-1', 'Q493R-2', 'S704L-1', 'S704L-2', 'T547K-1', 'T547K-2'))
+
+delta_data_mod <- melt(delta_data, id.vars='SampleID',
+                       measure.vars=c('Data.N1', 'Variant.N1', 'L452R-1', 'L452R-2', 'P681R-1', 'P681R-2'))
+
+```
+```{r C12880T-epicc-plot}
+#plot Original N1 Ct and new N1 Ct and C12880T mutation Cts
+epicc_ct_plot_C12880T <- omicron_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='C12880T-1' | variable == 'C12880T-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Omicron C12880T",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_C12880T
+```
+```{r D3N-epicc-plot}
+epicc_ct_plot_D3N <- omicron_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='D3N-1' | variable == 'D3N-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Omicron D3N",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_D3N
+```
+```{r G339D-epicc-plot}
+epicc_ct_plot_G339D <- omicron_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='G339D-1' | variable == 'G339D-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Omicron G339D",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_G339D
+```
+```{r Q493R-epicc-plot}
+epicc_ct_plot_Q493R <- omicron_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='Q493R-1' | variable == 'Q493R-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Omicron Q493R",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_Q493R
+```
+```{r S704L-epicc-plot}
+epicc_ct_plot_S704L <- omicron_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='S704L-1' | variable == 'S704L-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Omicron S704L",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_S704L
+```
+```{r T547K-epicc-plot}
+epicc_ct_plot_T547K <- omicron_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='T547K-1' | variable == 'T547K-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Omicron T547K",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_T547K
+```
+```{r K417N-epicc-plot}
+epicc_ct_plot_K417N <- alpha_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='K417N-1' | variable == 'K417N-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Alpha-like N501Y",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_K417N
+```
+```{r N501Y-epicc-plot}
+epicc_ct_plot_N501Y <- alpha_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='N501Y-1' | variable == 'N501Y-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Alpha-like N501Y",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_N501Y
+```
+```{r L452R-epicc-plot}
+epicc_ct_plot_L452R <- delta_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='L452R-1' | variable == 'L452R-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Delta-like L452R",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_L452R
+```
+```{r P681R-epicc-plot}
+epicc_ct_plot_P681R <- delta_data_mod %>%
+  filter(variable == "Data.N1" | variable == 'Variant.N1' | variable =='P681R-1' | variable == 'P681R-2') %>%
+  ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "EPICC Delta P681R",
+          y = "Ct",
+          x = "Mutation") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+#epicc_ct_plot_P681R
+```
+<br>
+
+### <span style="color: blue;">Comparison of Taqman mutant assay Ct values between week 48 specimens and EPICC specimens.</span>
+<br>
+
+#### <span style="color: gray;">Week 48 specimens have a Sc2 Ct on the flu/sc2 assay between 20-40, with several negatives. For the C12880T mutation, the Ct increases slightly for the wild type and decreases slightly for the mutant. One specimen that was negative on the flu/sc2 assay was positive for the C12880T wild type.</span>
+
+#### <span style="color: gray;">When EPICC specimens were first processed (red) the N1 Ct was significantly higher than the Sc2 Ct of Week 48 specimens. (N1 and flu/sc2 Ct were previously shown to have a 1:1 correlation.) Specimens were frozen for storage and thawed for the Taqman mutant assay. After storage and thawing, many of the specimens became negative for N1 and for specimens that remained positive, the Ct increased significantly (green). 
+
+```{r wk48-epicc-comp}
+#arrange wk48 and epicc plots side by side for common mutations
+ggarrange(wk48_ct_plot_C12880T, epicc_ct_plot_C12880T, widths = c(3,4))  
+ggarrange(wk48_ct_plot_D3N, epicc_ct_plot_D3N, widths = c(3,4))
+ggarrange(wk48_ct_plot_G339D, epicc_ct_plot_G339D, widths = c(3,4))
+ggarrange(wk48_ct_plot_T547K, epicc_ct_plot_T547K, widths = c(3,4))
+```
+<br>
+
+### <span style="color: blue;">Comparison of Taqman mutant assay Ct values between week 48 specimens and week 49 specimens.</span>
+<br>
+
+#### <span style="color: gray;">Week 49 specimens have a lower average Sc2 Ct on the flu/sc2 assay than wk48 specimens. The significantly higher N1 Ct is not expected based on previous data from weeks 24 and 26 showing similar Cts between the flu/sc2 assay and N1. </span>
+
+```{r wk48-wk49-comp}
+#arrange wk48 and wk49 plots side by side for common mutations
+ggarrange(wk48_ct_plot_C12880T, wk49_ct_plot_C12880T, widths = c(3,4))  
+ggarrange(wk48_ct_plot_D3N, wk49_ct_plot_D3N, widths = c(3,4))
+ggarrange(wk48_ct_plot_G339D, wk49_ct_plot_G339D, widths = c(3,4))
+```
+
+
+<br>
+
+### <span style="color: blue;">EPICC Alpha-like specimens</span>
+<br>
+
+
+```{r epicc-alpha-plot}
+#Side by Side of Alpha-like mutation plots for EPICC specimens
+ggarrange(epicc_ct_plot_K417N, epicc_ct_plot_N501Y)
+```
+<br>
+
+### <span style="color: blue;">EPICC Delta-like specimens</span>
+<br>
+
+```{r epicc-delta-plot}
+#Side by side of Delta-like mutation plots for EPICC specimens
+ggarrange(epicc_ct_plot_L452R, epicc_ct_plot_P681R)
+```
+
+<br>
+
+### <span style="color: blue;">EPICC Alpha-like specimens - Comparison to Sequencing Results</span>
+<br>
+```{r epicc-call-data}
+#upload data output from Design and Analysis sotware with call for each variant
+epicc_call_data <- read_excel("/Users/vhogan/Documents/EPICC/Variant/Variant_DesignAnalysis_Export_13dec22.xlsx", sheet = "epicc") 
+
+#pivot to clean data, just want sample IDs and calls
+#Should have same # as epicc_data (125)
+#Define mutations as wild, mutant, or no call
+
+epicc_call <- epicc_call_data %>%
+  pivot_wider(
+    id_cols = Sample,
+    names_from = `SNP Assay`,
+    values_from = Call
+  ) %>%
+  rename(SampleID = Sample) %>%
+  filter(!grepl('NTC', SampleID)) %>% #remove any NTCs
+  mutate(K417N = ifelse(K417N == "Undetermined"| K417N == "No Amplification", "No Call",
+                         ifelse(K417N == "G/G", "Wild",
+                                ifelse(K417N == "c/C", "Mutant", "error")))) %>%
+  mutate(N501Y = ifelse(N501Y == "Undetermined"| N501Y == "No Amplification", "No Call",
+                         ifelse(N501Y == "A/A", "Wild",
+                                ifelse(N501Y == "T/T", "Mutant", "error")))) %>%
+  mutate(L452R = ifelse(L452R == "Undetermined"| L452R == "No Amplification", "No Call",
+                         ifelse(L452R == "C/C" | L452R == "T/T", "Wild",                    #Wuhan is T/T others are C/C??
+                                ifelse(L452R == "G/G", "Mutant", "error")))) %>%
+  mutate(P681R = ifelse(P681R == "Undetermined"| P681R == "No Amplification", "No Call",
+                         ifelse(P681R == "G/G", "Wild",
+                                ifelse(P681R == "C/C", "Mutant", "error")))) %>%
+  mutate(C12880T = ifelse(C12880T == "Undetermined"| C12880T == "No Amplification", "No Call",
+                         ifelse(C12880T == "C/C", "Wild",
+                                ifelse(C12880T == "G/G", "Mutant", "error")))) %>%
+  mutate(D3N = ifelse(D3N == "Undetermined"| D3N == "No Amplification", "No Call", "error")) %>%
+  mutate(G339D = ifelse(G339D == "Undetermined"| G339D == "No Amplification", "No Call",
+                         ifelse(G339D == "T/T", "Wild",
+                                ifelse(G339D == "A/A", "Mutant", "error")))) %>%
+  mutate(Q493R = ifelse(Q493R == "Undetermined"| Q493R == "No Amplification", "No Call",
+                         ifelse(Q493R == "C/C", "Wild",
+                                ifelse(Q493R == "G/G", "Mutant", "error")))) %>%
+  mutate(S704L = ifelse(S704L == "Undetermined"| S704L == "No Amplification", "No Call",
+                         ifelse(S704L == "G/G", "Wild",
+                                ifelse(S704L == "C/C", "Mutant", "error")))) %>%
+  mutate(T547K = ifelse(T547K == "Undetermined"| T547K == "No Amplification", "No Call",
+                         ifelse(T547K == "A/A", "Wild",
+                                ifelse(T547K == "C/C", "Mutant", "error"))))
+  
+#join with other data, and separate for each group
+
+#Use grepl to check if mutation was identified in sequencing
+
+#Create new value to combine Taqman mutant call and sequencing identification for plotting
+
+epicc_data_call <- left_join(epicc_data, epicc_call, by = 'SampleID')
+alpha_seq_call <- epicc_data_call %>%
+  filter(Group == "Alpha-like") %>%
+  mutate(N501Y_seq = ifelse(grepl('N501Y', aaSubstitutions), "N501Y identified in sequencing", "N501Y not identified in sequencing"))  %>%
+  mutate(K417N_seq = ifelse(grepl('K417N', aaSubstitutions), "K417N identified in sequencing", "K417N not identified in sequencing"))  %>%
+  mutate(K417N_callseq = paste(K417N, ",", K417N_seq)) %>%
+  mutate(N501Y_callseq = paste(N501Y, ",", N501Y_seq))
+
+delta_seq_call <- epicc_data_call %>%
+  filter(Group == "Delta-like") %>%
+  mutate(P681R_seq = ifelse(grepl('P681R', aaSubstitutions), "P681R identified in sequencing", "P681R not identified in sequencing"))  %>%
+  mutate(L452R_seq = ifelse(grepl('L452R', aaSubstitutions), "L452R identified in sequencing", "L452R not identified in sequencing"))  %>%
+  mutate(L452R_callseq = paste(L452R, ",", L452R_seq)) %>%
+  mutate(P681R_callseq = paste(P681R, ",", P681R_seq)) 
+
+omicron_seq_call <- epicc_data_call %>%
+  filter(Group == "Omicron") %>%
+  mutate(D3N_seq = ifelse(grepl('D3N', aaSubstitutions), "D3N identified in sequencing", "D3N not identified in sequencing"))  %>%
+  mutate(C12880T_seq = ifelse(grepl('C12880T', aaSubstitutions), "C12880T identified in sequencing", "C12880T not identified in sequencing"))  %>%
+  mutate(G339D_seq = ifelse(grepl('G339D', aaSubstitutions), "G339D identified in sequencing", "G339D not identified in sequencing"))  %>%
+  mutate(Q493R_seq = ifelse(grepl('Q493R', aaSubstitutions), "Q493R identified in sequencing", "Q493R not identified in sequencing"))  %>%
+  mutate(S704L_seq = ifelse(grepl('S704L', aaSubstitutions), "S704L identified in sequencing", "S704L not identified in sequencing"))  %>%
+  mutate(T547K_seq = ifelse(grepl('T547K', aaSubstitutions), "T547K identified in sequencing", "T547K not identified in sequencing"))  %>%
+  mutate(C12880T_callseq = paste(C12880T, ",", C12880T_seq)) %>%
+  mutate(D3N_callseq = paste(D3N, ",", D3N_seq)) %>%
+  mutate(G339D_callseq = paste(G339D, ",", G339D_seq)) %>%
+  mutate(Q493R_callseq = paste(Q493R, ",", Q493R_seq)) %>%
+  mutate(S704L_callseq = paste(S704L, ",", S704L_seq)) %>%
+  mutate(T547K_callseq = paste(T547K, ",", T547K_seq))
+```
+```{r K417N-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+K417N_plotly <- alpha_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~K417N_callseq, 
+            colors =  c("springgreen3", "violetred", "orange", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `K417N-1`,
+                        '</br>K417N-2: ', `K417N-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='K417N Taqman vs Sequencing results - percent genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'))
+
+
+K417N_plotly
+```
+```{r K417N-call-newCt-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+K417N_plotly_new <- alpha_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~Variant.N1) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~K417N_callseq, 
+            colors =  c("springgreen3", "violetred", "orange", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `K417N-1`,
+                        '</br>K417N-2: ', `K417N-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='K417N Taqman vs Sequencing results - Ct comparison',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'))
+
+
+K417N_plotly_new
+```
+```{r N501Y-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+N501Y_plotly <- alpha_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~N501Y_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `N501Y-1`,
+                        '</br>K417N-2: ', `N501Y-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='N501Y Taqman vs Sequencing results - Percent Genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'))
+
+
+N501Y_plotly
+```
+```{r N501Y-call-newCt-plot}
+#Plot original N1 Ct vs new Ct. Color by Taqman mutant call/sequencing identification
+N501Y_plotly <- alpha_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`Variant.N1`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~N501Y_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `N501Y-1`,
+                        '</br>K417N-2: ', `N501Y-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='N501Y Taqman vs Sequencing results - Ct Comparison',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'))
+
+
+N501Y_plotly
+```
+<br>
+
+### <span style="color: blue;">EPICC Omicron specimens - Comparison to Sequencing Results</span>
+<br>
+
+```{r C12880T-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+C12880T_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~C12880T_callseq, 
+            colors =  c("springgreen3", "violetred", "orange", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `C12880T-1`,
+                        '</br>K417N-2: ', `C12880T-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='C12880T Taqman vs Sequencing results - Percent Genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'))
+
+
+C12880T_plotly
+```
+```{r C12880T-call-newCt-plot}
+#Plot original N1 Ct vs new N1 Ct. Color by Taqman mutant call/sequencing identification
+C12880T_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`Variant.N1`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~C12880T_callseq, 
+            colors =  c("springgreen3", "violetred", "orange", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `C12880T-1`,
+                        '</br>K417N-2: ', `C12880T-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='C12880T Taqman vs Sequencing results - Ct comparison',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'))
+
+
+C12880T_plotly
+```
+```{r D3N-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+
+#Only one color defined because all specimens are no call + no identification of D3N in sequencing
+D3N_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~D3N_callseq, 
+            colors =  c("springgreen3"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `D3N-1`,
+                        '</br>K417N-2: ', `D3N-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='D3N Taqman vs Sequencing results - Percent Genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'),
+         showlegend = TRUE)
+
+
+D3N_plotly
+```
+```{r D3N-call-newCt-plot}
+#Plot original N1 Ct vs new N1 Ct. Color by Taqman mutant call/sequencing identification
+
+#Only one color defined because all specimens are no call + no identification of D3N in sequencing
+D3N_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`Variant.N1`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~D3N_callseq, 
+            colors =  c("springgreen3"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `D3N-1`,
+                        '</br>K417N-2: ', `D3N-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='D3N Taqman vs Sequencing results - Ct comparison',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'),
+         showlegend = TRUE)
+
+
+#D3N_plotly
+```
+```{r G339D-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+G339D_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~G339D_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `G339D-1`,
+                        '</br>K417N-2: ', `G339D-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='G339D Taqman vs Sequencing results - Percent Genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'))
+
+
+G339D_plotly
+```
+```{r G339D-call-newCt-plot}
+#Plot original N1 Ct vs new N1 Ct. Color by Taqman mutant call/sequencing identification
+G339D_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~Variant.N1) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~G339D_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `G339D-1`,
+                        '</br>K417N-2: ', `G339D-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='G339D Taqman vs Sequencing results - Ct Comparison',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'))
+
+
+G339D_plotly
+```
+```{r Q493R-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+Q493R_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~Q493R_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `Q493R-1`,
+                        '</br>K417N-2: ', `Q493R-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='Q493R Taqman vs Sequencing results - Percent Genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'))
+
+
+Q493R_plotly
+```
+```{r Q493R-call-newCt-plot}
+#Plot original N1 Ct vs new N1 Ct. Color by Taqman mutant call/sequencing identification
+Q493R_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~Variant.N1) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~Q493R_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `Q493R-1`,
+                        '</br>K417N-2: ', `Q493R-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='Q493R Taqman vs Sequencing results - Ct Comparsion',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'))
+
+
+Q493R_plotly
+```
+```{r S704L-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+S704L_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~S704L_callseq, 
+            colors =  c("violetred", "orange", "slateblue", "springgreen3"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `S704L-1`,
+                        '</br>K417N-2: ', `S704L-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='S704L Taqman vs Sequencing results - Percent Genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'))
+
+S704L_plotly
+```
+```{r S704L-call-newCt-plot}
+#Plot original N1 Ct vs new N1 Ct. Color by Taqman mutant call/sequencing identification
+S704L_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~Variant.N1) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~S704L_callseq, 
+            colors =  c("springgreen3", "orange", "slateblue", "violetred"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `S704L-1`,
+                        '</br>K417N-2: ', `S704L-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='S704L Taqman vs Sequencing results - Ct Comparsion',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'))
+
+
+S704L_plotly
+```
+```{r T547K-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+T547K_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~T547K_callseq, 
+            colors =  c("violetred", "orange", "slateblue", "springgreen3"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `T547K-1`,
+                        '</br>K417N-2: ', `T547K-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='T547K Taqman vs Sequencing results - Percent Genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'))
+
+
+T547K_plotly
+```
+```{r T547K-call-newCt-plot}
+#Plot original N1 Ct vs new N1 Ct. Color by Taqman mutant call/sequencing identification
+T547K_plotly <- omicron_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~Variant.N1) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~T547K_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `T547K-1`,
+                        '</br>K417N-2: ', `T547K-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='T547K Taqman vs Sequencing results - Ct Comparsion',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'))
+
+
+T547K_plotly
+```
+<br>
+
+### <span style="color: blue;">EPICC Delta specimens - Comparison to Sequencing Results</span>
+<br>
+
+```{r L452R-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+L452R_plotly <- delta_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~L452R_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `L452R-1`,
+                        '</br>K417N-2: ', `L452R-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='L452R Taqman vs Sequencing results - Percent Genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'))
+
+
+L452R_plotly
+```
+```{r L452R-call-newCt-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+L452R_plotly <- delta_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`Variant.N1`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~L452R_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `L452R-1`,
+                        '</br>K417N-2: ', `L452R-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='L452R Taqman vs Sequencing results - Ct Comparison',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'))
+
+
+L452R_plotly
+```
+```{r P681R-call-genome-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+P681R_plotly <- delta_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~`%>=20x`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~P681R_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `P681R-1`,
+                        '</br>K417N-2: ', `P681R-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='P681R Taqman vs Sequencing results - Percent Genome',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = '% Genome Coverage at 20x'))
+
+
+P681R_plotly
+```
+```{r P681R-call-newCt-plot}
+#Plot original N1 Ct vs % genome. Color by Taqman mutant call/sequencing identification
+P681R_plotly <- delta_seq_call %>%
+  plot_ly(x = ~Data.N1, y = ~Variant.N1) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers',
+            color = ~P681R_callseq, 
+            colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+            text = ~paste('</br>', SampleID,
+                        '</br>Original N1: ', Data.N1, 
+                        '</br>New N1: ', Variant.N1,
+                        '</br>K417N-1: ', `P681R-1`,
+                        '</br>K417N-2: ', `P681R-2`), 
+            hoverinfo = 'text') %>%
+  
+  layout(title ='P681R Taqman vs Sequencing results - Ct Comparison',
+         xaxis = list(title = 'Original N1 Ct', 
+                      range=list(25,45),
+                      tickvals = seq(25, 45, 5)),
+         yaxis = list(title = 'New N1 Ct'))
+
+
+P681R_plotly
+```
+<br>
+
+### <span style="color: blue;">Twist Standards Ct Values</span>
+<br>
+
+
+```{r Twist-table}
+Twist_alpha <- epicc_data %>%
+  filter(Group == "Twist") %>%
+  select(SampleID, `K417N-1`, `K417N-2`, `N501Y-1`, `N501Y-2`) %>%
+  filter(!is.na(`K417N-1`))
+
+Twist_delta <- epicc_data %>%
+  filter(Group == "Twist") %>%
+  select(SampleID, `L452R-1`, `L452R-2`, `P681R-1`, `P681R-2`) %>%
+  filter(!is.na(`L452R-1`))
+
+Twist_omicron <- epicc_data %>%
+  filter(Group == "Twist") %>%
+  select(SampleID, `C12880T-1`, `C12880T-2`, `D3N-1`, `D3N-2`, `G339D-1`, `G339D-2`, `S704L-1`, `S704L-2`, `T547K-1`, `T547K-2`) %>%
+  filter(!is.na(`D3N-1`))
+
+datatable(Twist_alpha)
+datatable(Twist_delta)
+datatable(Twist_omicron)
+```
+
+```{r epicc-Ct-based-call}
+#Define calls using nested ifelse based on Ct values. -1 is wild type, -2 is mutant. If both are 0 or >40 then no call, if one is positive and other is negative or higher Ct then make call to compare Ct-based calls to software-based calls
+
+epicc_data_call <- epicc_data_call %>%
+  mutate(K417N_Ct_call = ifelse((`K417N-1`==0 | `K417N-1` >40) & (`K417N-2` ==0 | `K417N-2` >40), "No Call",
+                                    ifelse((`K417N-1` == 0 | `K417N-1` > 40), "Mutant",
+                                           ifelse((`K417N-2` == 0 | `K417N-2` > 40), "Wild",
+                                                  ifelse(`K417N-1` > `K417N-2`, "Mutant", "Wild"))))) %>%
+
+  mutate(N501Y_Ct_call = ifelse((`N501Y-1`==0 | `N501Y-1` >40) & (`N501Y-2` ==0 | `N501Y-2` >40), "No Call", 
+                                    ifelse((`N501Y-1` == 0 | `N501Y-1` > 40), "Mutant",
+                                           ifelse((`N501Y-2` == 0 | `N501Y-2` > 40), "Wild",
+                                                  ifelse(`N501Y-1` > `N501Y-2`, "Mutant", "Wild"))))) %>%
+  mutate(C12880T_Ct_call = ifelse((`C12880T-1`==0 | `C12880T-1` >40) & (`C12880T-2` ==0 | `C12880T-2` >40), "No Call",
+                                    ifelse((`C12880T-1` == 0 | `C12880T-1` > 40), "Mutant",
+                                           ifelse((`C12880T-2` == 0 | `C12880T-2` > 40), "Wild",
+                                                  ifelse(`C12880T-1` > `C12880T-2`, "Mutant", "Wild"))))) %>%
+
+  mutate(D3N_Ct_call = ifelse((`D3N-1`==0 | `D3N-1` >40) & (`D3N-2` ==0 | `D3N-2` >40), "No Call", 
+                                    ifelse((`D3N-1` == 0 | `D3N-1` > 40), "Mutant",
+                                           ifelse((`D3N-2` == 0 | `D3N-2` > 40), "Wild",
+                                                  ifelse(`D3N-1` > `D3N-2`, "Mutant", "Wild"))))) %>%
+  
+  mutate(G339D_Ct_call = ifelse((`G339D-1`==0 | `G339D-1` >40) & (`G339D-2` ==0 | `G339D-2` >40), "No Call", 
+                                    ifelse((`G339D-1` == 0 | `G339D-1` > 40), "Mutant",
+                                           ifelse((`G339D-2` == 0 | `G339D-2` > 40), "Wild",
+                                                  ifelse(`G339D-1` > `G339D-2`, "Mutant", "Wild"))))) %>%
+  
+  mutate(Q493R_Ct_call = ifelse((`Q493R-1`==0 | `Q493R-1` >40) & (`Q493R-2` ==0 | `Q493R-2` >40), "No Call", 
+                                    ifelse((`Q493R-1` == 0 | `Q493R-1` > 40), "Mutant",
+                                           ifelse((`Q493R-2` == 0 | `Q493R-2` > 40), "Wild",
+                                                  ifelse(`Q493R-1` > `Q493R-2`, "Mutant", "Wild"))))) %>%
+  mutate(S704L_Ct_call = ifelse((`S704L-1`==0 | `S704L-1` >40) & (`S704L-2` ==0 | `S704L-2` >40), "No Call", 
+                                    ifelse((`S704L-1` == 0 | `S704L-1` > 40), "Mutant",
+                                           ifelse((`S704L-2` == 0 | `S704L-2` > 40), "Wild",
+                                                  ifelse(`S704L-1` > `S704L-2`, "Mutant", "Wild"))))) %>%
+  mutate(T547K_Ct_call = ifelse((`T547K-1`==0 | `T547K-1` >40) & (`T547K-2` ==0 | `T547K-2` >40), "No Call", 
+                                    ifelse((`T547K-1` == 0 | `T547K-1` > 40), "Mutant",
+                                           ifelse((`T547K-2` == 0 | `T547K-2` > 40), "Wild",
+                                                  ifelse(`S704L-1` > `S704L-2`, "Mutant", "Wild"))))) %>%
+  mutate(L452R_Ct_call = ifelse((`L452R-1`==0 | `L452R-1` >40) & (`L452R-2` ==0 | `L452R-2` >40), "No Call",
+                                    ifelse((`L452R-1` == 0 | `L452R-1` > 40), "Mutant",
+                                           ifelse((`L452R-2` == 0 | `L452R-2` > 40), "Wild",
+                                                  ifelse(`L452R-1` > `L452R-2`, "Mutant", "Wild"))))) %>%
+
+  mutate(P681R_Ct_call = ifelse((`P681R-1`==0 | `P681R-1` >40) & (`P681R-2` ==0 | `P681R-2` >40), "No Call", 
+                                    ifelse((`P681R-1` == 0 | `P681R-1` > 40), "Mutant",
+                                           ifelse((`P681R-2` == 0 | `P681R-2` > 40), "Wild",
+                                                  ifelse(`P681R-1` > `P681R-2`, "Mutant", "Wild")))))
+
+#Binary field, true if all 10 mutations are called the same from software and Ct-based call.
+#Filter for only entries that are different
+different_calls <- epicc_data_call %>%
+  mutate(diff = ifelse(K417N == K417N_Ct_call &
+                         N501Y == N501Y_Ct_call &
+                         C12880T == C12880T_Ct_call &
+                         D3N == D3N_Ct_call &
+                         G339D == G339D_Ct_call &
+                         Q493R == Q493R_Ct_call &
+                         S704L == S704L_Ct_call &
+                         T547K == T547K_Ct_call &
+                         L452R == L452R_Ct_call &
+                         P681R == P681R_Ct_call, TRUE, FALSE)) %>%
+  filter(diff == FALSE) %>%
+  mutate(K417N_diff = ifelse(K417N != K417N_Ct_call, "K417N", NA)) %>%
+  mutate(N501Y_diff = ifelse(N501Y != N501Y_Ct_call, "N501Y", NA)) %>%
+  mutate(C12880T_diff = ifelse(C12880T != C12880T_Ct_call, "C12880T", NA)) %>%
+  mutate(D3N_diff = ifelse(D3N != D3N_Ct_call, "D3N", NA)) %>%
+  mutate(G339D_diff = ifelse(G339D != G339D_Ct_call, "G339D", NA)) %>%
+  mutate(Q493R_diff = ifelse(Q493R != Q493R_Ct_call, "Q493R", NA)) %>%
+  mutate(S704L_diff = ifelse(S704L != S704L_Ct_call, "S704L", NA)) %>% 
+  mutate(T547K_diff = ifelse(T547K != T547K_Ct_call, "T547K", NA)) %>%
+  mutate(L452R_diff = ifelse(L452R != L452R_Ct_call, "L452R", NA)) %>%
+  mutate(P681R_diff = ifelse(P681R != P681R_Ct_call, "P681R", NA)) %>%
+  unite("differences", c(K417N_diff, N501Y_diff, C12880T_diff, D3N_diff, G339D_diff, Q493R_diff, S704L_diff, T547K_diff, L452R_diff, P681R_diff), sep = ", ", na.rm = TRUE)
+
+```
+
+  
+```{r diff-call-plot}
+mutations <- c("K417N", "N501Y", "C12880T", "D3N", "G339D", "Q493R", "S704L", "T547K", "L452R", "P681R")
+
+diff_plotly <- plot_ly(data = different_calls, type = 'scatter', mode = 'markers')
+
+  diff_plotly <- diff_plotly %>%
+    filter(different_calls$K417N != different_calls$K417N_Ct_call) %>%
+
+    add_trace(data = different_calls, 
+              x = different_calls$`K417N-1`, y = different_calls$`K417N-2`,
+              name = "K417N",
+              #colors =  c("orange", "violetred", "springgreen3", "slateblue"),
+              text = ~paste('</br>', SampleID,
+                          '</br>Original N1: ', Data.N1, 
+                          '</br>New N1: ', Variant.N1,
+                          '</br>K417N-1:', `K417N-1`,
+                          '</br>K417N-2:', `K417N-2`,
+                          '</br>K417N Call: ', K417N,
+                          '</br>K417N Ct Call: ', K417N_Ct_call), 
+              hoverinfo = 'text')
+
+
+            
+diff_plotly <- diff_plotly %>%
+  layout(title ='Specimens with K417N Call different from Ct-based call',
+         xaxis = list(title = 'K417N-1 Ct', 
+                      range=list(0,45),
+                      tickvals = seq(0, 45, 5)),
+         yaxis = list(title = 'K417N-2 Ct',
+                      range=list(0,45),
+                      tickvals = seq(0, 45, 5)))
+
+
+diff_plotly
+```

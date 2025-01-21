@@ -1,0 +1,806 @@
+---
+title: "EPICC Ct Comparison after Correcting baseline determination"
+subtitle: "Specimens with data comments removed"
+author: "Vivian Hogan"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+<br>
+
+### <span style="color: blue;">Background</span>
+##### <span style="color: gray;">Some early runs from EPICC had RT-PCR data exported without accounting for the automatically determined baseline correction. In most cases, the QuantStudio software is able to appropriately determine CT values before the logarithmic increase in signal is detected. However, in some cases the software selects this value incorrectly and counts some of the logarithmic increase as noise. This creates a "double waterfall" effect in the data where a logarithmic decrease in signal is seen at early Ct values. When the baseline determination is chosen correctly for these specimens, a typical logarithmic increase in signal is seen.</span>
+<br>
+
+##### <span style="color: gray;">In this analysis, ~390 runs from May 2020 - January 2021 were checked for any errors in analyzing the data prior to export. Of these, 114 (29%) runs were found to have a problem with either the baseline determination or threshold selection</span>
+<br>
+
+##### <span style="color: red;">Upon analysis of this data, some inconsistencies were found that were due to re-exporting old data, that had been later rerun. When data for a given specimen was re-exported twice, the later run was kept. However, if a specimen was rerun and the rerun was not in the 29% of runs that were re-exported, the analysis was comparing old data to newer data. Since dates within the database are not always consistent with date run (especially prior to Apr21), dates could not be used to ensure only data from the same run was being compared. It is suggested for future studies to store the full run name in the database.</span>
+##### <span style="color: red;">To attempt to account for this, all specimens with any data comments were removed from this version of the analysis. Another version includes these specimens.</span>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(writexl)
+library(readxl)
+library(plotly)
+library(viridis)
+library(DT)
+library(stringr)
+```
+
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#upload txt file, remove header manually first
+#Have to import into 3 different data frames because of different column classes not being able to append
+data <- list.files(path = "/Users/vivian/EPICC/RTPCR_re-export/Jun2022_reexport", pattern ="*.txt", full.names = T)  %>%
+  setNames(nm = .) %>%
+  lapply(read.delim) %>%
+  bind_rows(.id = "Run") %>%
+  select(Run, Sample.Name, Target.Name, Task, CT, Quantity) %>% #select common columns
+  mutate(Quantity = replace(Quantity, Quantity == "10,000.000", 10000)) %>% #remove commas, don't work with as.numeric()
+  mutate(Quantity = replace(Quantity, Quantity == "1,000.000", 1000)) %>%
+  mutate(Quantity = as.numeric(Quantity)) #change to numeric to merge with data2
+
+data2 <- list.files(path = "/Users/vivian/EPICC/RTPCR_re-export/Jun2022_reexport/Double", pattern ="*.txt", full.names = T)  %>%
+  setNames(nm = .) %>%
+  lapply(read.delim) %>%
+  bind_rows(.id = "Run") %>%
+  rename(CT = Cт) %>%
+  select(Run, Sample.Name, Target.Name, Task, CT, Quantity)
+
+data3 <- list.files(path = "/Users/vivian/EPICC/RTPCR_re-export/Jun2022_reexport/Char", pattern ="*.txt", full.names = T)  %>%
+  setNames(nm = .) %>%
+  lapply(read.delim) %>%
+  bind_rows(.id = "Run") %>%
+  select(Run, Sample.Name, Target.Name, Task, CT, Quantity) %>% #select common columns
+  mutate(Quantity = replace(Quantity, Quantity == "10,000.000", 10000)) %>% #remove commas, don't work with as.numeric()
+  mutate(Quantity = replace(Quantity, Quantity == "1,000.000", 1000)) %>%
+  mutate(Quantity = as.numeric(Quantity)) #change to numeric to merge with data2
+
+#Join all imports
+data <- rbind(data, data2) 
+data <- rbind(data, data3)
+
+#Remove extra text from Run
+data$Run <-  gsub("/Users/vivian/EPICC/RTPCR_re-export/Jun2022_reexport/", "", data$Run)
+data$Run <-  gsub("_data.txt", "", data$Run) #remove extra text from file names
+data$Run <-  gsub(".txt", "", data$Run)
+data$Run <-  gsub("Char/", "", data$Run) #remove folder path
+data$Run <-  gsub("Double/", "", data$Run)
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#remove standards from data by filtering based on task
+#Select desired columns
+clean_data <- data %>%
+  filter(Task == "UNKNOWN") %>%
+  select(Sample.Name, Target.Name, CT, Quantity, Run) %>%
+  mutate(CT = replace(CT, CT == "Undetermined", 0))
+
+#Create pivot table with both CT and Quantity of N1, N2
+wide_data <- clean_data %>%
+  pivot_wider(names_from = Target.Name, values_from = c(CT, Quantity)) %>%
+  filter(Sample.Name != "") %>% #remove blank SampleIDs
+  filter(CT_N1 != "NULL") %>% # remove any NULL entries for CT
+  filter(CT_N2 != "NULL") %>%
+  filter(CT_RP != "NULL") %>%
+  mutate(N1 = as.numeric(unlist(CT_N1))) %>% #Unlist CTs and change to numeric - only works if list lengths are all one
+  ### mutate(length = lengths(CT_N2)) #Used to check lengths to resolve length error
+  mutate(N2 = as.numeric(unlist(CT_N2))) %>%
+  mutate(Rp = as.numeric(unlist(CT_RP)))
+
+#Reorganize table to match Access database: rename remaining columns, drop Quantity_RP
+
+final_data <- wide_data %>%
+  rename(SampleID = Sample.Name, "N1 Quantity" = Quantity_N1, "N2 Quantity" = Quantity_N2) %>%
+  select(-Quantity_RP) %>%
+  mutate(Run_Date = as.Date(str_extract(Run, "\\d{1,8}" ), format = "%Y%m%d")) %>% #extract date from run name into new column
+  mutate(Run_Date = as.Date(Run_Date, format = "%Y-%m-%d")) %>%
+  mutate(`N1 Quantity` = as.numeric(`N1 Quantity`)) %>%
+  mutate(`N2 Quantity` = as.numeric(`N2 Quantity`))
+
+```
+```{r, include=FALSE}
+#export run list
+Run <- final_data %>%
+  select(Run) %>%
+  unique()
+
+
+#write.csv(Run, file="/Users/vivian/EPICC/RTPCR_re-export/Runs_30Jun22.csv", row.names=FALSE)
+```
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#Remove duplicates in re-exported data, keeping most recent Run_Date
+final_data <- final_data %>%
+  group_by(SampleID) %>%
+  slice(which.max(as.Date(Run_Date, "%Y-%m-%d")))
+  
+```
+
+
+```{r, ,echo=FALSE, message=FALSE, warning=FALSE}
+#load data pull from Access
+access_data_pull <- read_excel(path = "/Users/vivian/EPICC/RTPCR_re-export/EPICC_Data_Pull_VH_30Jun22.xlsx") %>%
+  rename(SampleType = `Sample Type`) %>% #Remove space in column name
+  mutate(SampleType = replace(SampleType, SampleType == 'NP swab', 'NP Swab')) %>% #Change all mis-named swab types
+  mutate(SampleType = replace(SampleType, SampleType == 'NP SWAB', 'NP Swab')) %>%
+  mutate(SampleType = replace(SampleType, SampleType == 'OP swab', 'OP Swab')) %>%
+  mutate(SampleType = replace(SampleType, SampleType == 'OP SWAB', 'OP Swab')) %>%
+  mutate(SampleType = replace(SampleType, SampleType == 'RECTAL Swab', 'Rectal Swab')) %>%
+  mutate(SampleType = replace(SampleType, SampleType == 'rECTAL Swab', 'Rectal Swab')) %>%
+  mutate(SampleType = replace(SampleType, SampleType == 'RS Swab', 'Rectal Swab')) %>%
+  mutate(SampleType = replace(SampleType, SampleType == 'SC Nasal Swab', 'Self-Collected Nasal Swab')) %>%
+  mutate(SampleType = replace(SampleType, SampleType == 'NS Swab', 'Self-Collected Nasal Swab')) %>%
+  mutate(SampleType = replace(SampleType, SampleType == 'Self-collected Nasal Swab', 'Self-Collected Nasal Swab')) %>%
+  filter(!str_detect(SampleID, "old")) %>% #remove data from old samples (data has been replaced) 
+  mutate(ambiguity_score = signif(as.numeric(ambiguity_score), 2)) %>% #rounding to 2 sig figs
+  mutate(qcoverallScore = round(qcoverallScore, 0)) #rounding to ones place
+```
+
+```{r,echo=FALSE}
+#Load Run data - corrections made on each Run
+Runs <- read_excel ("/Users/vivian/EPICC/RTPCR_re-export/Runs_type.xlsx", sheet = "Sheet1")
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+comp_data <- left_join(final_data, access_data_pull, by = 'SampleID') %>%
+  filter(!is.na(`Subject ID`)) %>% #remove samples without metadata
+  mutate(N1diff_p = (N1.y-N1.x)/N1.y*100) %>%
+  mutate(N1diff_p = signif(N1diff_p, 3)) %>%
+  mutate(N2diff_p = (N2.y-N2.x)/N2.y*100) %>%
+  mutate(N2diff_p = signif(N2diff_p, 3)) %>%
+  mutate(RPdiff_p = (Rp.y-Rp.x)/Rp.y*100) %>%
+  mutate(RPdiff_p = signif(RPdiff_p, 3)) %>%
+  mutate(N1diff = N1.y-N1.x) %>%
+  mutate(N2diff = N2.y-N2.x) %>%
+  mutate(RPdiff = Rp.y-Rp.x)
+
+comp_data <- left_join(comp_data, Runs, by = "Run")
+```
+<br>
+
+##### <span style="color: gray;">2517 specimens were originally found to match data in the database. By identifying typos in sample IDs (e.g. the letter O instead of the numeral 0) 134 more specimens were matched. 10 additional specimens could not be unambiguously identified. The 134 specimens were added for the rest of this analysis for a total of 2651 specimens.</span>
+##### <span style="color: red;">In this version of the analysis, 258 specimens with data comments were removed for a total of 2393 specimens.</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#add 134 specimens with typos corrected
+data_with_typos <- read_excel(path = "/Users/vivian/EPICC/RTPCR_re-export/Data_re-export_08Jul22_typos_fixed.xlsx") %>%
+  filter(!(SampleID %in% comp_data$SampleID)) %>% #remove entries already in comp_data
+  select(-dataComments) %>%
+  left_join(access_data_pull, by = "SampleID") %>%
+  mutate(N1diff_p = (N1.y-N1.x)/N1.y*100) %>% #calculate changes for new data (done earlier for comp_data)
+  mutate(N1diff_p = signif(N1diff_p, 3)) %>%
+  mutate(N2diff_p = (N2.y-N2.x)/N2.y*100) %>%
+  mutate(N2diff_p = signif(N2diff_p, 3)) %>%
+  mutate(RPdiff_p = (Rp.y-Rp.x)/Rp.y*100) %>%
+  mutate(RPdiff_p = signif(RPdiff_p, 3)) %>%
+  mutate(N1diff = N1.y-N1.x) %>%
+  mutate(N2diff = N2.y-N2.x) %>%
+  mutate(RPdiff = Rp.y-Rp.x)
+
+  
+comp_data <- comp_data %>%
+  rbind(data_with_typos) #add data with typos
+  
+#Want to remove entries that were rerun. E.g. 1st run inconclusive, 2nd run resulted but I only re-exported data from the 1st run. I can't compare that to the data in the database because it is from the 2nd run. Tried to filter by Run_Date and Date but these don't match. There are no dates prior to Apr21 in the database and many dates don't exactly match the actual run date. Instead decided to remove all with any dataComments, though this is not an exact way to do it. I don't think there IS an exact way to do it.
+
+##This removes 258 entries - creating separate markdown file to run same code on this data.
+comp_data_cleaner <- comp_data %>% 
+  filter(is.na(dataComments))
+  
+```
+
+<br>
+  
+### <span style="color: blue;">N1 Ct Comparison</span>
+##### <span style="color: gray;">2393 specimens were compared from the original data (currently in EPICC database) with the new data (after baseline and threshold correction). Most of these fall on or close to the diagonal line on the scatter plot of x=y. 164 specimens (6.8%) have a difference greater than 3 Ct from the original data. These are outlined in purple on the plots. Of the 164 specimens, 34 had no N1 pop in the original data and had an N1 Ct < 40 in the new data as seen on the y axis. 11 had N1 Ct < 40 in the original data and have no N1 pop in the new data as seen on the x axis.</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+disp_N1_outliers <-comp_data_cleaner %>%
+  select(SampleID, N1.x, N1.y, N1diff, N2.x, N2.y, N2diff, Run, Correction, `%>=20x`) %>%
+  filter(N1diff > 3 | N1diff < -3) %>%
+  arrange(-N1diff)
+
+N1_yaxis  <- disp_N1_outliers %>%
+  filter(N1.y == 0 & N1.x < 40 & N1.x != 0)
+
+N1_xaxis <- disp_N1_outliers %>%
+  filter(N1.y < 40 & N1.y != 0 & N1.x == 0)
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+
+N1_scatter <- comp_data_cleaner %>%
+  plot_ly(x = ~N1.y, y = ~N1.x) %>%
+  add_trace(type = 'scatter',
+          mode = 'markers',
+          color = ~Run,
+          colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', SampleID,
+                        '</br>Run:', Run,
+                        '</br>Original: ', N1.y, 
+                        '</br>New: ', N1.x), 
+          hoverinfo = 'text') %>%
+  
+  add_trace(x=disp_N1_outliers$N1.y, y = disp_N1_outliers$N1.x, #outliers 
+          type = 'scatter',
+          mode = 'markers',
+          name = 'N1 outliers',
+          marker = list(color = "#9933FF", symbol = 'star-diamond-open'),
+          text = ~paste('</br>', disp_N1_outliers$SampleID,
+                        '</br>Run:', disp_N1_outliers$Run,
+                        '</br>Original: ', disp_N1_outliers$N1.y, 
+                        '</br>New: ', disp_N1_outliers$N1.x), 
+          hoverinfo = 'text') %>%
+    
+  layout(title ='N1 Ct Comparison - by Run',
+         autosize = F, width = 1000, height = 600,
+         yaxis = list(title = 'New RTPCR Ct', 
+                      range=list(0,45),
+                      tickvals = seq(0, 45, 5)),
+         xaxis = list(title = 'Original RTPCR Ct', 
+                      range=list(0,45), 
+                      tickvals = seq(0, 45, 5)))
+
+N1_scatter
+```
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+N1_scatter <- comp_data_cleaner %>%
+  plot_ly(x = ~N1.y, y = ~N1.x) %>%
+  add_trace(type = 'scatter',
+          mode = 'markers',
+          color = ~Correction,
+          colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', SampleID,
+                        '</br>Run:', Run,
+                        '</br>Original: ', N1.y, 
+                        '</br>New: ', N1.x), 
+          hoverinfo = 'text') %>%
+
+  add_trace(x=disp_N1_outliers$N1.y, y = disp_N1_outliers$N1.x, #outliers 
+          type = 'scatter',
+          mode = 'markers',
+          name = 'N1 outliers',
+          marker = list(color = "#9933FF", symbol = 'star-diamond-open'),
+          text = ~paste('</br>', disp_N1_outliers$SampleID,
+                        '</br>Run:', disp_N1_outliers$Run,
+                        '</br>Original: ', disp_N1_outliers$N1.y, 
+                        '</br>New: ', disp_N1_outliers$N1.x), 
+          hoverinfo = 'text') %>%
+    
+  layout(title ='N1 Ct Comparison - by Correction Made',
+         autosize = F, width = 1000, height = 600,
+         yaxis = list(title = 'New RTPCR Ct', 
+                      range=list(0,45),
+                      tickvals = seq(0, 45, 5)),
+         xaxis = list(title = 'Original RTPCR Ct', 
+                      range=list(0,45), 
+                      tickvals = seq(0, 45, 5)))
+
+N1_scatter
+```
+<br>
+<br>
+<br>
+<br>
+<br>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#display table (option)
+#DT::datatable(disp_N1_outliers, options(list(
+              #paging=T, pageLength = 10)),
+              #colnames = c("Sample ID", "Original N1", "New N1", "N1 Diff", "Original N2", "New N2", "N2 Diff","Run", "Correction"))
+```
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+### <span style="color: blue;">N2 Ct Comparison</span>
+##### <span style="color: gray;">For N2, 202 specimens (8.4%) have a difference greater than 3 Ct from the original data. These are outlined in pink on the plots. Of the 202 specimens, 38 had no N2 pop in the original data and had an N2 Ct < 40 in the new data as seen on the y axis. 11 had N1 Ct < 40 in the original data and have no N1 pop in the new data as seen on the x axis. </span>
+<br>
+
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+disp_N2_outliers <-comp_data_cleaner %>%
+  select(SampleID, N1.x, N1.y, N1diff, N2.x, N2.y, N2diff, Run, Correction, `%>=20x`) %>%
+  filter(N2diff > 3 | N2diff < -3) %>%
+  arrange(-N2diff)
+
+N2_yaxis  <- disp_N2_outliers %>%
+  filter(N2.y == 0 & N2.x < 40 & N2.x != 0)
+
+N2_xaxis <- disp_N2_outliers %>%
+  filter(N2.y < 40 & N2.y != 0 & N2.x == 0)
+
+#display outliers (option)
+#DT::datatable(disp_N2_outliers, options(list(
+#              paging=T, pageLength = 10)),
+#              colnames = c("Sample ID", "Original N1", "New N1", "N1 % Diff", "Original N2", "New N2", "N2 % #Diff","Run"))
+```
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+N2_scatter <- comp_data_cleaner %>%
+  plot_ly(x = ~N2.y, y = ~N2.x) %>%
+  add_trace(type = 'scatter',
+          mode = 'markers',
+          color = ~Run,
+          colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', SampleID,
+                        '</br>Run:', Run,
+                        '</br>Original: ', N2.y, 
+                        '</br>New: ', N2.x), 
+          hoverinfo = 'text') %>%
+  
+  add_trace(x=disp_N1_outliers$N2.y, y = disp_N1_outliers$N2.x, #outliers from N1 scatter
+          type = 'scatter',
+          mode = 'markers',
+          name = 'N1 outliers',
+          marker = list(color = "#9933FF", symbol = 'star-diamond-open'),
+          text = ~paste('</br>', disp_N1_outliers$SampleID,
+                        '</br>Run:', disp_N1_outliers$Run,
+                        '</br>Original: ', disp_N1_outliers$N2.y, 
+                        '</br>New: ', disp_N1_outliers$N2.x), 
+          hoverinfo = 'text') %>%
+  
+  add_trace(x=disp_N2_outliers$N2.y, y = disp_N2_outliers$N2.x, #N2 outliers
+          type = 'scatter',
+          mode = 'markers',
+          name = 'N2 outliers',
+          marker = list(color = "#FF00FF", symbol = 'star-square-open'),
+          text = ~paste('</br>', disp_N2_outliers$SampleID,
+                        '</br>Run:', disp_N2_outliers$Run,
+                        '</br>Original: ', disp_N2_outliers$N2.y, 
+                        '</br>New: ', disp_N2_outliers$N2.x), 
+          hoverinfo = 'text') %>%
+    
+  layout(title ='N2 Ct Comparison - by Run',
+         autosize = F, width = 1000, height = 600,
+         yaxis = list(title = 'New RTPCR Ct', 
+                      range=list(0,45),
+                      tickvals = seq(0, 45, 5)),
+         xaxis = list(title = 'Original RTPCR Ct', 
+                      range=list(0,45), 
+                      tickvals = seq(0, 45, 5)))
+
+N2_scatter
+```
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+##### <span style="color: red;">Why are we seeing change in N2 Cts when corrections were only made to N1?</span>
+##### <span style="color: red;">This may be due to comparing old data with reruns.
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+N2_scatter <- comp_data_cleaner %>%
+  plot_ly(x = ~N2.y, y = ~N2.x) %>%
+  add_trace(type = 'scatter',
+          mode = 'markers',
+          color = ~Correction,
+          colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', SampleID,
+                        '</br>Run:', Run,
+                        '</br>Original: ', N2.y, 
+                        '</br>New: ', N2.x), 
+          hoverinfo = 'text') %>%
+  
+  add_trace(x=disp_N1_outliers$N2.y, y = disp_N1_outliers$N2.x, #outliers from N1 scatter
+          type = 'scatter',
+          mode = 'markers',
+          name = 'N1 outliers',
+          marker = list(color = "#9933FF", symbol = 'star-diamond-open'),
+          text = ~paste('</br>', disp_N1_outliers$SampleID,
+                        '</br>Run:', disp_N1_outliers$Run,
+                        '</br>Original: ', disp_N1_outliers$N2.y, 
+                        '</br>New: ', disp_N1_outliers$N2.x), 
+          hoverinfo = 'text') %>%
+
+  add_trace(x=disp_N2_outliers$N2.y, y = disp_N2_outliers$N2.x, #N2 outliers
+          type = 'scatter',
+          mode = 'markers',
+          name = 'N2 outliers',
+          marker = list(color = "#FF00FF", symbol = 'star-square-open'),
+          text = ~paste('</br>', disp_N2_outliers$SampleID,
+                        '</br>Run:', disp_N2_outliers$Run,
+                        '</br>Original: ', disp_N2_outliers$N2.y, 
+                        '</br>New: ', disp_N2_outliers$N2.x), 
+          hoverinfo = 'text') %>%
+    
+  layout(title ='N2 Ct Comparison -by Correction Made',
+         autosize = F, width = 1000, height = 600,
+         yaxis = list(title = 'New RTPCR Ct', 
+                      range=list(0,45),
+                      tickvals = seq(0, 45, 5)),
+         xaxis = list(title = 'Original RTPCR Ct', 
+                      range=list(0,45), 
+                      tickvals = seq(0, 45, 5)))
+
+N2_scatter
+```
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#All outlier in one df, remove duplicate entries with unique()
+outliers <- bind_rows(disp_N2_outliers, disp_N1_outliers) %>%
+  unique() %>%
+  arrange(N1.y)
+
+#display all outliers
+#DT::datatable(outliers, options(list(
+#              paging=T, pageLength = 10)),
+#              colnames = c("Sample ID", "Original N1", "New N1", "N1 % Diff", "Original N2", "New N2", "N2 % Diff","Run", "Correction"))
+```
+### <span style="color: blue;">Practical Impacts</span>
+<br>
+
+```{r,include=FALSE}
+##### <span style="color: gray;">Mean and standard deviation of Ct change by specimen type. Specimens with no change in N1 or N2 removed. (Specimens with no N1 change removed from both calcualtions. Specimens with no N2 change removed from both calculations)</span>
+
+#Find samples with NA for N1diff. These do not have numeric data entries in the data table in the database.
+N1diff_NA <- comp_data_cleaner %>%
+  filter(is.na(N1diff))
+
+#calculate mean and standard deviation off all specimens
+mean <- comp_data_cleaner %>%
+  filter(!is.na(N1diff)) %>% #Remove NA entries
+  filter(N1diff != 0 | N2diff != 0) %>% #Remove entries with no change in N1 or N2
+  mutate(Total = 'Total') %>% #Add column to group all together
+  group_by(Total) %>%
+  summarise('Mean N1' = mean(N1diff), 'Median N1' = median(N1diff), 'Standard Deviation N1' = sd(N1diff), 
+            'Mean N2' = mean(N2diff), 'Median N2' = median(N2diff),'Standard Deviation N2' = sd(N2diff), n = n(),) %>%
+  rename('SampleType' = Total) #Change column name to be able to add to table by type
+
+#calculate mean and standard deviations by specimen type
+mean_by_type <- comp_data_cleaner %>%
+  filter(!is.na(N1diff)) %>% #Remove NA entries
+  filter(N1diff != 0 | N2diff != 0) %>% #Remove entries with no change in N1 or N2
+  group_by(SampleType) %>%
+  summarise('Mean N1' = mean(N1diff), 'Median N1' = median(N1diff), 'Standard Deviation N1' = sd(N1diff), 
+            'Mean N2' = mean(N2diff), 'Median N2' = median(N2diff), 'Standard Deviation N2' = sd(N2diff), n = n(),) %>%
+  rbind(mean) %>% #add Total row from above
+  mutate_if(is.numeric, round, 2) #round to two decimal places
+  
+
+DT::datatable(mean_by_type, options = list(paging = FALSE))
+
+#Number of entries with no change in N1 or N2
+no_change <- comp_data_cleaner %>%
+  filter(!is.na(N1diff)) %>%
+  filter(N1diff == 0 & N2diff == 0)
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#calculate mean and standard deviation off all specimens with change in N1
+mean_N1 <- comp_data_cleaner %>%
+  filter(!is.na(N1diff)) %>% #Remove NA entries
+  filter(N1diff != 0) %>% #Remove entries with no N1 change
+  mutate(Total = 'Total') %>% #Add column to group all together
+  group_by(Total) %>%
+  summarise('Mean N1' = mean(N1diff), 'Median N1' = median(N1diff), 'Standard Deviation N1' = sd(N1diff), 'n N1' = n(),) %>%
+  rename('SampleType' = Total) #Change column name to be able to add to table by type
+
+#calculate mean and standard deviations by specimen type
+mean_N1_by_type <- comp_data_cleaner %>%
+  filter(!is.na(N1diff)) %>% #Remove NA entries
+  filter(N1diff != 0) %>% #Remove entries with no N1 change
+  group_by(SampleType) %>%
+  summarise('Mean N1' = mean(N1diff), 'Median N1' = median(N1diff), 'Standard Deviation N1' = sd(N1diff), 'n N1' = n(),) %>%
+  rbind(mean_N1) %>% #add Total row from above
+  mutate_if(is.numeric, round, 2) #round to two decimal places
+
+#DT::datatable(mean_N1_by_type)
+
+```
+#### <span style="color: blue;">Mean and standard deviation of Ct change by specimen type. </span>
+##### <span style="color: gray;">Specimens with no change in N1 removed from N1 calculation and specimens with no change in N2 removed from N2 calculation.  If no change in both, removed for both.</span>
+##### <span style="color: gray;">Change in mean and median is small for N1 and N2 before and after re-analysis of data. The standard deviation is quite large, but significantly skewed by specimens that had a change in N1 or N2 popping or not. These are seen on the x and y axis in the above plots.
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#calculate mean and standard deviation off all specimens with change in N2
+mean_N2 <- comp_data_cleaner %>%
+  filter(!is.na(N2diff)) %>% #Remove NA entries
+  filter(N2diff != 0) %>% #Remove entries with no N1 change
+  mutate(Total = 'Total') %>% #Add column to group all together
+  group_by(Total) %>%
+  summarise('Mean N2' = mean(N2diff), 'Median N2' = median(N2diff), 'Standard Deviation N2' = sd(N2diff), 'n N2' = n(),) %>%
+  rename('SampleType' = Total) #Change column name to be able to add to table by type
+
+#calculate mean and standard deviations by specimen type
+mean_N2_by_type <- comp_data_cleaner %>%
+  filter(!is.na(N2diff)) %>% #Remove NA entries
+  filter(N2diff != 0) %>% #Remove entries with no N1 change
+  group_by(SampleType) %>%
+  summarise('Mean N2' = mean(N2diff), 'Median N2' = median(N2diff), 'Standard Deviation N2' = sd(N2diff), 'n N2' = n(),) %>%
+  rbind(mean_N2) %>% #add Total row from above
+  mutate_if(is.numeric, round, 2) #round to two decimal places
+
+DT::datatable(left_join(mean_N1_by_type, mean_N2_by_type), options = list(paging = FALSE)) #display stats for specimens with change in N1 or N2
+
+```
+<br>
+
+##### <span style="color: gray;">Removing specimens on x and y axis from calculation results in a standard deviation that is less than 3 Ct.</span>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#calculate mean and standard deviation off all specimens with change in N1, removing specimens on x or y axis
+mean_N1_noaxis <- comp_data_cleaner %>%
+  filter(!is.na(N1diff)) %>% #Remove NA entries
+  filter(N1diff != 0) %>% #Remove entries with no N1 change
+  filter(N1.x != 0, N1.y != 0) %>% #Remove entries on x and y axis (0 for either old or new data for N1)
+  mutate(Total = 'Total') %>% #Add column to group all together
+  group_by(Total) %>%
+  summarise('Mean N1' = mean(N1diff), 'Median N1' = median(N1diff), 'Standard Deviation N1' = sd(N1diff), 'n N1' = n(),) %>%
+  rename('SampleType' = Total) #Change column name to be able to add to table by type
+
+#calculate mean and standard deviations by specimen type, removing specimens on x or y axis
+mean_N1_by_type_noaxis <- comp_data_cleaner %>%
+  filter(!is.na(N1diff)) %>% #Remove NA entries
+  filter(N1diff != 0) %>% #Remove entries with no N1 change
+  filter(N1.x != 0, N1.y != 0) %>% #Remove entries on x and y axis (0 for either old or new data for N1)
+  group_by(SampleType) %>%
+  summarise('Mean N1' = mean(N1diff), 'Median N1' = median(N1diff), 'Standard Deviation N1' = sd(N1diff), 'n N1' = n(),) %>%
+  rbind(mean_N1_noaxis) %>% #add Total row from above
+  mutate_if(is.numeric, round, 2) #round to two decimal places
+
+#calculate mean and standard deviation off all specimens with change in N2, removing specimens on x or y axis
+mean_N2_noaxis <- comp_data_cleaner %>%
+  filter(!is.na(N2diff)) %>% #Remove NA entries
+  filter(N2diff != 0) %>% #Remove entries with no N1 change
+  filter(N2.x != 0, N2.y != 0) %>% #Remove entries on x and y axis (0 for either old or new data for N2)
+  mutate(Total = 'Total') %>% #Add column to group all together
+  group_by(Total) %>%
+  summarise('Mean N2' = mean(N2diff), 'Median N2' = median(N2diff), 'Standard Deviation N2' = sd(N2diff), 'n N2' = n(),) %>%
+  rename('SampleType' = Total) #Change column name to be able to add to table by type
+
+#calculate mean and standard deviations by specimen type, removing specimens on x or y axis
+mean_N2_by_type_noaxis <- comp_data_cleaner %>%
+  filter(!is.na(N2diff)) %>% #Remove NA entries
+  filter(N2diff != 0) %>% #Remove entries with no N1 change
+  filter(N2.x != 0, N2.y != 0) %>% #Remove entries on x and y axis (0 for either old or new data for N2)
+  group_by(SampleType) %>%
+  summarise('Mean N2' = mean(N2diff), 'Median N2' = median(N2diff), 'Standard Deviation N2' = sd(N2diff), 'n N2' = n(),) %>%
+  rbind(mean_N2_noaxis) %>% #add Total row from above
+  mutate_if(is.numeric, round, 2) #round to two decimal places
+
+DT::datatable(left_join(mean_N1_by_type_noaxis, mean_N2_by_type_noaxis), options = list(paging = FALSE)) #display stats for specimens with change in N1 or N2
+
+
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+# add columns defining each N1/N2/Rp as pos or neg and add result columns, add column indicating change made
+comp_data_cleaner <- comp_data_cleaner %>%
+  mutate(N1_og = ifelse((N1.y > 40 | N1.y == 0), "neg", (ifelse(is.na(N1.y), NA, "pos")))) %>%
+  mutate(N2_og = ifelse((N2.y > 40 | N2.y == 0), "neg", (ifelse(is.na(N2.y), NA, "pos")))) %>%
+  mutate(Rp_og = ifelse((Rp.y > 40 | Rp.y == 0), "neg", (ifelse(is.na(Rp.y), NA, "pos")))) %>%
+  mutate(N1_new = ifelse((N1.x > 40 | N1.x == 0), "neg", (ifelse(is.na(N1.x), NA, "pos")))) %>%
+  mutate(N2_new = ifelse((N2.x > 40 | N2.x == 0), "neg", (ifelse(is.na(N2.x), NA, "pos")))) %>%
+  mutate(Rp_new = ifelse((Rp.x > 40 | Rp.x == 0), "neg", (ifelse(is.na(Rp.x), NA, "pos")))) %>%
+  mutate(og_result = ifelse((N1_og == "pos" & N2_og == "pos"), "pos", 
+                            ifelse(Rp_og == "neg", "invalid", 
+                                   ifelse(N1_og == "pos" | N2_og == "pos", "inc", "neg")))) %>%
+  mutate(og_result = ifelse(is.na(og_result), "inc", og_result)) %>% #mark NAs as inconclusive 
+  mutate(new_result = ifelse((N1_new == "pos" & N2_new == "pos"), "pos", 
+                             ifelse(Rp_new == "neg", "invalid", 
+                                    ifelse(N1_new == "pos" | N2_new == "pos", "inc", "neg")))) %>%
+  mutate(change = paste(og_result, "to", new_result, sep = "_"))
+
+#calculate number of each type of change in result
+change <- comp_data_cleaner %>%
+  group_by(change) %>%
+  summarise(n = n())
+
+#remove entries with no change
+disp_change <- change %>%
+  filter(change != "pos_to_pos" & change != "neg_to_neg" & change != "inc_to_inc" & change != "invalid_to_invalid")
+```
+<br>
+
+##### <span style="color: gray;">Plot showing overall difference in specimen result before and after data re-export</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#calculate number of each result in original data
+og_result <- comp_data_cleaner %>%
+  group_by(og_result) %>%
+  summarise(n = n())
+
+#calculate number of each result in re-exported data
+new_result <- comp_data_cleaner %>%
+  group_by(new_result) %>%
+  summarise(n = n())
+            
+#bar chart showing number of each result in original and re-exported data
+results_bar <- og_result %>%
+  plot_ly(x = ~og_result, y = ~n) %>%
+  add_trace(type = 'bar',
+            name = 'original') %>%
+  
+  add_trace(x = new_result$new_result, y = ~new_result$n, 
+            type = 'bar',
+            name = 'new') %>%
+  
+  layout(title ='Overall Change in Results',
+         yaxis = list(title = 'Number of Specimens'),
+         xaxis = list(title = 'Result', categoryorder = "array",
+                    categoryarray = c("neg", "pos", "inc", "invalid"))) #set order for x axis
+
+results_bar
+```
+<br>
+
+##### <span style="color: gray;">Plot showing how specimen result change before and after data re-export</span>
+##### <span style="color: gray;">Discussion:</span>
+* Largest number is **negative to inconclusive** (n=47). Not much concern here as these are unlikely to get good sequencing data. If any went from N1>36 to N1<36 they will be in the batch of newly sequenced specimens.
+* **Inconclusive to positive** (n=24) and **invalid to positive** (n=1) are taken care of by the newly sequenced specimens if any went from N1>36 to N1<36
+* **Positive to inconclusive** (10) and **positive to negative** (8) Viewed 10 of these individually when genome was >0. 
+* **Inconclusive to negative** (n=5), **negative to invalid** (7), **invalid to negative** (5), and **invalid to inconclusive** (4) should not have a large impact on data analysis or interpretation
+<br>
+
+##### <span style="color: red;">The total number that had a change in specimen result decreased from 206 to 118 when specimens with data comments were removed</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#bar chart showing number of each type of change in result
+change_bar <- disp_change %>%
+  plot_ly(x = ~change, y = ~n, type = 'bar')  %>%
+  
+  layout(title ='Types of Change in Results',
+         yaxis = list(title = 'Number'),
+         xaxis = list(title = 'Result Change', categoryorder = "total descending"))
+
+change_bar
+```
+<br>
+
+##### <span style="color: gray;">Details of 118 specimens with change in result</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#show table with all specimens having a change in result
+change_table <- comp_data_cleaner %>%
+  filter(change != "pos_to_pos" & change != "neg_to_neg" & change != "inc_to_inc" & change != "invalid_to_invalid") %>%
+  select(SampleID, change, N1.y, N2.y, Rp.y, og_result, N1.x, N2.x, Rp.x, new_result, `%>=20x`)
+  
+DT::datatable(change_table, options = list(paging = TRUE),
+              colnames = c('Sample ID', "Result Change", "Original N1", "Original N2", "Original Rp", "Original Result",
+                           "New N1", "New N2", "New Rp", "New Result", "%>=20x"))
+
+```
+<br>
+
+##### <span style="color: gray;">Comparison of old and new RTPCR with sequencing data. N1 outliers (outlined in purple) had a change of more than 3 Ct from original to new data.</span>
+
+##### <span style="color: red;">Add new sequencing data here when available</span>
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#N1 Ct vs genome coverage plot
+
+ct_percent_genome <- comp_data_cleaner %>% 
+   plot_ly(x =  ~ N1.x, y =  ~ `%>=20x`) %>%
+     add_trace(type = 'scatter',
+     name = "New",
+     mode = 'markers',
+     text = ~paste('</br>', SampleID,
+                        '</br>Run:', Run,
+                        '</br>Percent Difference: ', N2diff, 
+                        '</br>Original: ', N1.y, 
+                        '</br>New: ', N1.x), 
+     hoverinfo = 'text') %>%
+   
+  add_trace(x = comp_data_cleaner$N1.y, y =  comp_data_cleaner$`%>=20x`,
+     type = 'scatter',
+     name = "Original",
+     mode = 'markers',
+     text = ~paste('</br>', comp_data_cleaner$SampleID,
+                        '</br>Run:', comp_data_cleaner$Run,
+                        '</br>Percent Difference: ', comp_data_cleaner$N2diff, 
+                        '</br>Original: ', comp_data_cleaner$N1.y, 
+                        '</br>New: ', comp_data_cleaner$N1.x), 
+     hoverinfo = 'text') %>%
+  
+  add_trace(x = disp_N1_outliers$N1.x, y =  disp_N1_outliers$`%>=20x`,
+     type = 'scatter',
+     mode = 'markers',
+     name = 'N1 outliers',
+     marker = list(color = "#9933FF", symbol = 'star-diamond-open'),
+     text = ~paste('</br>', disp_N1_outliers$SampleID,
+                        '</br>Run:', disp_N1_outliers$Run,
+                        '</br>Percent Difference: ', disp_N1_outliers$N2diff, 
+                        '</br>Original: ', disp_N1_outliers$N1.y, 
+                        '</br>New: ', disp_N1_outliers$N1.x), 
+     hoverinfo = 'text') %>%
+  
+     layout(
+     title = "N1 Ct vs Percent Genome Coverage 20x - Comparison",
+     yaxis = list(
+       title = 'Percent Genome Coverage 20x',
+       tickvals = seq(0, 100, 10),
+       range = list(0,100)),
+     xaxis = list(
+       title = 'N1 Ct',
+       tickvals = seq(0, 45, 5),
+       range = list(0,45)))
+
+ct_percent_genome
+```
+
+### <span style="color: blue;">Specimens to be re-processed</span>
+##### <span style="color: gray;">78 specimens were found that had N1 Ct>36 or negative and after re-export, N1 was <36 but had not yet been sequenced</span>
+##### <span style="color: gray;">19 specimens had N1 Ct = 0 and genome coverage > 20% after re-export (y-axis)</span>
+##### <span style="color: gray;">15 specimens had N1 Ct = 0 and genome coverage > 20% in original data (y-axis)</span>
+##### <span style="color: gray;">13 new specimens entered the SW quadrant</span>
+<br>
+```{r, include = FALSE}
+#Specimens on y-axis in original data and/or new data
+yaxis_new <- comp_data_cleaner %>%
+  filter(N1.x == 0 & `%>=20x` > 20) %>%
+  select(SampleID) %>%
+  mutate(type = "re-export y-axis")
+
+yaxis_all <- access_data_pull %>%
+  filter(N1 == 0 & `%>=20x` > 20) %>%
+  select(SampleID) %>%
+  mutate(type = "original y-axis") %>%
+  rbind(yaxis_new) 
+
+#write.csv(yaxis_all, file="/Users/vivian/EPICC/RTPCR_re-export/EPICC_Yaxis_08Jul22.csv", row.names=FALSE)
+```
+
+```{r, include = FALSE}
+#Specimens newly (or still) in SW quadrant - some are the same as previous SW quadrant
+SW_new <- comp_data_cleaner %>%
+  filter(N1.x < 28 & `%>=20x` < 80 & N1.x != 0) %>%
+  select(SampleID, N1.x, `%>=20x`, N1.y) %>%
+  mutate(type = "re-export SW")
+
+#write.csv(SW_new, file="/Users/vivian/EPICC/RTPCR_re-export/EPICC_Re_export_SW_08Jul22.csv", row.names=FALSE)
+```
+
+```{r, include=FALSE}
+#data export: all re-exported data
+#This contains specimen IDs that do not match, including non-EPICC specimens and specimens with typos that were corrected after uploading to the database. To see data in the database after corrections were made, see file uploaded to fix typos
+
+x_final_data <- final_data %>%
+  select(SampleID, N1, N2, Rp, `N1 Quantity`, `N2 Quantity`, Run_Date) %>%
+  mutate(dataComments = "Data was re-analyzed to account for proper baseline determination and threshold selection [VH 16Jun21]") %>%
+  mutate(`N1 Quantity`= as.numeric(unlist(`N1 Quantity`))) %>% #need to unlist and write as numeric to export as csv
+  mutate(`N2 Quantity`= as.numeric(unlist(`N2 Quantity`)))
+  
+#write.csv(x_final_data, file="/Users/vivian/EPICC/RTPCR_re-export/EPICC_Re-export_data_08Jul22.csv", row.names=FALSE)
+```
+
+```{r, include = FALSE}
+#data export: specimens that should be sequenced. (N1 became positive and less than 36 but currently no sequencing data)
+need_sequenced <- outliers %>%
+  filter(N1.x < 36 & (N1.y > 36 | N1.y == 0)) %>%
+  filter(N1.x != 0) %>%
+  filter(is.na(`%>=20x`)) %>%
+  select(SampleID) %>%
+  mutate(type = 'Re-export needs sequencing')
+
+#write.csv(need_sequenced, file="/Users/vivian/EPICC/RTPCR_re-export/EPICC_Re-export_Needs_Sequencing_08Jul22.csv", row.names=FALSE)
+```
+
+```{r, include = FALSE}
+#export data with good sequencing that changed from pos to neg or inc
+specimens_to_check <- comp_data_cleaner %>%
+  filter((change == "pos_to_neg" | change == "pos_to_inc") & `%>=20x` > 0) %>%
+  select(SampleID, Run, change, N1.y, N2.y, Rp.y, og_result, N1.x, N2.x, Rp.x, new_result, Date, `%>=20x`, `Date of Sequence`)
+
+#write.csv(specimens_to_check, file="/Users/vivian/EPICC/RTPCR_re-export/EPICC_specimens_to_check_08Aug22.csv", row.names=FALSE)
+```
