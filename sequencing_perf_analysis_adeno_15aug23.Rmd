@@ -1,0 +1,315 @@
+---
+title: "Adeno Ct vs Quant values"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(stringr)
+library(readxl)
+library(plotly)
+library(reshape2)
+library(cowplot)
+library(data.table)
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+```
+```{r}
+#load data
+ct_data_aria <- read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/20230727_ARIA_GEIS_adenovirus_VH62.xlsx", sheet = "data") %>%
+  rename(Ct = adeno_ct) %>%
+  mutate(group = ifelse(str_detect(SampleID, '^A10'), "ARIA", "L6000")) %>%
+  select(SampleID, Ct, group)
+
+ct_data <- read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/20230613_Adenovirus_AD18-60_ATCC_Controls_VH_62.xlsx", sheet = "data") %>%
+  filter(str_detect(SampleID, "^AD")) %>%
+  rename(Ct = Adenovirus) %>%
+  mutate(group = "GEIS") %>%
+  bind_rows(ct_data_aria)
+
+lib_files_hexon_aria <-read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/quants/20230808_ARIA_SC2_V5-ADVBtiling-ADVHEX-INFB_KL.xlsx", sheet = 10, skip=40) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(lib_quant = `ng/µL`) %>%
+  filter(str_ends(SampleID, "ADVHEX")) %>%
+  mutate(SampleID = str_replace(SampleID, "_ADVHEX", "")) %>%
+  select(SampleID, lib_quant)
+
+lib_files <-read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/quants/20230614_wk23-ARIA-AdvSar_KL.xlsx", sheet = 10, skip=40) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(lib_quant = `ng/µL`) %>%
+  filter(str_detect(SampleID, "^AD")) %>%
+  select(SampleID, lib_quant) %>%
+  bind_rows(lib_files_hexon_aria)
+
+lib_files_tile_aria <-read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/quants/20230808_ARIA_SC2_V5-ADVBtiling-ADVHEX-INFB_KL.xlsx", sheet = 10, skip=40) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(lib_quant = `ng/µL`) %>%
+  filter(str_ends(SampleID, "ADVB")) %>%
+  mutate(SampleID = str_replace(SampleID, "_ADVB", "-B")) %>%
+  select(SampleID, lib_quant)
+
+lib_files_tile <-read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/quants/20230727_AdvTil_AD18-60_JMKL.xlsx", sheet = 10, skip=40) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(lib_quant = `ng/µL`) %>%
+  filter(str_detect(SampleID, "^AD")) %>%
+  select(SampleID, lib_quant)  %>%
+  bind_rows(lib_files_tile_aria)
+
+amp_files_hexon_aria <-read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/quants/20230808_ARIA_SC2_V5-ADVBtiling-ADVHEX-INFB_KL.xlsx", sheet = 4, skip=39) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(amp_quant = `ng/µL`) %>%
+  filter(str_ends(SampleID, "ADVHEX")) %>%
+  mutate(SampleID = str_replace(SampleID, "_ADVHEX", "")) %>%
+  select(SampleID, amp_quant)
+
+amp_files <-read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/quants/20230614_wk23-ARIA-AdvSar_KL.xlsx", sheet = 4, skip=39) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(amp_quant = `ng/µL`) %>%
+  filter(str_detect(SampleID, "^AD")) %>%
+  select(SampleID, amp_quant) %>%
+  bind_rows(amp_files_hexon_aria)
+
+amp_files_tile_aria <-read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/quants/20230808_ARIA_SC2_V5-ADVBtiling-ADVHEX-INFB_KL.xlsx", sheet = 4, skip=39) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(amp_quant = `ng/µL`) %>%
+  filter(str_ends(SampleID, "ADVB")) %>%
+  mutate(SampleID = str_replace(SampleID, "_ADVB", "-B")) %>%
+  select(SampleID, amp_quant) 
+
+amp_files_tile <-read_excel(path = "/Users/vhogan/Documents/ARIA/Adeno/quants/20230727_AdvTil_AD18-60_JMKL.xlsx", sheet = 4, skip=39) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(amp_quant = `ng/µL`) %>%
+  filter(str_detect(SampleID, "^AD")) %>%
+  select(SampleID, amp_quant) %>%
+  bind_rows(amp_files_tile_aria)
+
+joined_data <- left_join(ct_data, amp_files, by = "SampleID") %>%
+  left_join(lib_files, by = "SampleID") 
+
+tile_data <- left_join(lib_files_tile, amp_files_tile, by = "SampleID") %>%
+  separate_wider_delim(SampleID, delim = "-", names = c("SampleID", "Tile")) %>%
+  left_join(ct_data, by = "SampleID") 
+
+  
+```
+```{r}
+#Check for specimens with missing data - already removed, just positives not sequenced
+missing_lib <- joined_data %>%
+  filter(is.na(lib_quant))
+
+```
+
+```{r}
+amp_quant_ct <- joined_data %>%
+  plot_ly(x=~Ct, y =~amp_quant, color = ~group) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            text = ~paste('</br>', joined_data$SampleID, '</br>Adeno Ct: ', joined_data$Ct),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Amplicon Quant vs. Adeno CT Values',
+            yaxis = list(title = 'Amplicon Quant (ng/µL)', tickvals = seq(0, 110, 5)), 
+            xaxis = list(title='Adeno CT Values', tickvals = seq(0, 50, 5), range = list(0,50)))
+
+amp_quant_ct 
+```
+```{r}
+amp_quant_ct_tile <- tile_data %>%
+  plot_ly(x=~Ct, y =~amp_quant) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = tile_data$Tile, 
+            text = ~paste('</br>', tile_data$SampleID, '</br>RSv Ct: ',tile_data$Ct),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Tiling Amplicon Quant vs. Adeno CT Values',
+         #showlegend = FALSE,
+            yaxis = list(title = 'Amplicon Quant (ng/µL)', tickvals = seq(0, 110, 5)), 
+            xaxis = list(title='Adeno CT Values', tickvals = seq(0, 45, 5), range = list(0,45)))
+
+amp_quant_ct_tile
+```
+```{r}
+amp_box_plot <- tile_data %>%
+  ggplot(aes(x = Tile, y = amp_quant, fill = Tile)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Amp Quant Comparison",
+          y = "Amp Quant",
+          x = "Tile") +
+    theme_cowplot() +
+    #scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+amp_box_plot
+```
+
+```{r}
+lib_quant_ct <- joined_data %>%
+  plot_ly(x=~Ct, y =~lib_quant, color = ~group) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            #color = joined_data$RP_discrete, 
+            #colors = c('green', 'black', 'orange', 'red'),
+            text = ~paste('</br>', joined_data$SampleID, '</br>RSv Ct: ', joined_data$Ct),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Library Quant vs. Adeno CT Values',
+            yaxis = list(title = 'Library Quant (ng/µL)', tickvals = seq(0, 110, 5)), 
+            xaxis = list(title='Adeno CT Values', tickvals = seq(0, 45, 5), showlegend = T))
+
+lib_quant_ct 
+```
+```{r}
+lib_quant_ct_tile <- tile_data %>%
+  plot_ly(x=~Ct, y = ~lib_quant) %>%
+          add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = tile_data$Tile, 
+            #colors = c('green', 'black', 'orange', 'red'),
+            text = ~paste('</br>', tile_data$SampleID, '</br>RSv Ct: ', tile_data$Ct),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Tiling Library Quant vs. Adeno CT Values',
+            yaxis = list(title = 'Library Quant (ng/µL)', tickvals = seq(0, 110, 5)), 
+            xaxis = list(title='Adeno CT Values', tickvals = seq(0, 45, 5), showlegend = T))
+
+lib_quant_ct_tile
+```
+```{r}
+#lib_data_melt <- melt(data_joined, id.vars='SampleID', measure.vars=c('Ct', 'lib_quant_a', 'lib_quant_b'))
+```
+```{r}
+lib_box_plot <- tile_data %>%
+  ggplot(aes(x = Tile, y = lib_quant, fill = Tile)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Lib Quant Comparison",
+          y = "Lib Quant",
+          x = "Tile") +
+    theme_cowplot() +
+    #scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #remove legend
+ 
+lib_box_plot
+```
+```{r}
+#List of all text files 
+filenames <- list.files("/Users/vhogan/Documents/ARIA/Adeno/consensus", pattern="*.txt", full.names=FALSE)
+
+#empty dataframe
+coverage_df <- data.frame()
+
+#read each text file, calculate coverage, add to empty df
+for(file in filenames){
+  filepath <- paste0("/Users/vhogan/Documents/ARIA/Adeno/consensus/", file)
+  sample <- read.table(filepath, header = TRUE, sep = "\t") %>%
+    mutate(consensus_bi = ifelse(Consensus_Count > 10, 1, 0))
+  
+  sample_coverage <- c(file, sum(sample$consensus_bi))
+  
+  coverage_df <- coverage_df %>%
+    rbind(sample_coverage)
+}
+colnames(coverage_df) <- c("SampleID", "Coverage")
+
+#max_coverage <- as.numeric(max(coverage_df$Coverage))
+
+coverage_df <- coverage_df %>%
+  mutate(Coverage = as.numeric(Coverage)) %>%
+  mutate(percent_cov = Coverage/620*100) %>%
+  mutate(percent_cov = ifelse(percent_cov >100, 100, percent_cov)) %>%
+  mutate(SampleID = gsub(".txt", "", SampleID)) 
+
+joined_data <- left_join(joined_data, coverage_df, by = join_by(SampleID)) %>%
+  mutate(percent_cov = ifelse(is.na(percent_cov), 0, percent_cov))
+```
+```{r}
+ct_percent_cov <- joined_data %>% 
+   plot_ly(
+     x =  ~ Ct,
+     y =  ~ percent_cov,
+     color = ~group,
+     type = 'scatter',
+     mode = 'markers',
+     text = ~paste('</br>', joined_data$SampleID, '</br>SC2 Ct: ', joined_data$Ct),
+     hoverinfo = 'text') %>%
+  
+   layout(
+     title = "Hexon Coverage vs. CT Values",
+     yaxis = list(
+       title = '% Coverage',
+       range = c(0,105),
+       tickvals = seq(0, 100, 10)),
+     xaxis = list(
+       title = 'CT Values',
+       range = c(0,50),
+       tickvals = seq(0, 50, 5)))
+     
+ ct_percent_cov
+
+```
+```{r}
+###B tiling
+#List of all text files 
+filenames_B <- list.files("/Users/vhogan/Documents/ARIA/Adeno/consensus/Btiling", pattern="*.txt", full.names=FALSE)
+
+#empty dataframe
+coverage_df_B <- data.frame()
+
+#read each text file, calculate coverage, add to empty df
+for(file in filenames_B){
+  filepath <- paste0("/Users/vhogan/Documents/ARIA/Adeno/consensus/Btiling/", file)
+  sample <- read.table(filepath, header = TRUE, sep = "\t") %>%
+    mutate(consensus_bi = ifelse(Consensus_Count > 10, 1, 0))
+  
+  sample_coverage <- c(file, sum(sample$consensus_bi))
+  
+  coverage_df_B <- coverage_df_B %>%
+    rbind(sample_coverage)
+}
+colnames(coverage_df_B) <- c("SampleID", "Coverage_B_Tiling")
+
+coverage_df_B <- coverage_df_B %>%
+  mutate(Coverage_B_Tiling = as.numeric(Coverage_B_Tiling)) %>%
+  mutate(percent_cov_B = Coverage_B_Tiling/35000*100) %>%
+  mutate(percent_cov_B = ifelse(percent_cov_B >100, 100, percent_cov_B)) %>%
+  mutate(SampleID = gsub(".txt", "", SampleID)) 
+
+joined_data <- left_join(joined_data, coverage_df_B, by = "SampleID")
+```
+```{r}
+ct_percent_cov_B <- joined_data %>% 
+   plot_ly(
+     x =  ~ Ct,
+     y =  ~ percent_cov_B,
+     color = ~ group,
+     type = 'scatter',
+     mode = 'markers',
+     text = ~paste('</br>', joined_data$SampleID, '</br>SC2 Ct: ', joined_data$Ct),
+     hoverinfo = 'text') %>%
+  
+   layout(
+     title = "B Tiling Coverage vs. CT Values",
+     yaxis = list(
+       title = '% Coverage',
+       range = c(0,105),
+       tickvals = seq(0, 100, 10)),
+     xaxis = list(
+       title = 'CT Values',
+       range = c(0,50),
+       tickvals = seq(0, 50, 5)))
+     
+ ct_percent_cov_B
+
+```

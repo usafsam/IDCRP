@@ -1,0 +1,348 @@
+---
+title: "Rhino/Enterovirus Sequencing results and Predictors of Success"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readxl)
+library(plotly)
+library(viridis)
+library(DT)
+library(reshape2)
+library(cowplot)
+library(lubridate)
+library(RColorBrewer)
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+```
+```{r}
+#load data
+
+rhe_typer_cromwell <- list.files(path = "/Users/vhogan/Documents/ARIA/RHE/rhe_typer/", pattern = "*.csv", full.names=TRUE) %>%
+  lapply(read.csv) %>%
+  bind_rows() %>%
+  rename(SampleID = name) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SampleID = str_replace(SampleID, "_ISAACS", "")) %>%
+  select(-`reverse.complement`) %>%
+  mutate(workflow = "Cromwell")
+
+rhe_typer_irma <- list.files(path = "/Users/vhogan/Documents/ARIA/RHE/rhe_typer/irma/", 
+                             pattern = "*.csv", full.names=TRUE) %>%
+  lapply(read.csv) %>%
+  bind_rows() %>%
+  rename(SampleID = name) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SampleID = str_replace(SampleID, "_ISAACS", "")) %>%
+  mutate(SampleID = str_replace(SampleID, "_S[0-9]+", "")) %>%
+  select(-`reverse.complement`) %>%
+  mutate(workflow = "IRMA")
+
+lib_files <-list.files(path = "/Users/vhogan/Documents/ARIA/RHE/quants", pattern = "*.xlsx", full.names = T) %>%
+  lapply(read_excel, sheet = 'Library Quant (C)', skip=40) %>%
+  bind_rows() %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(lib_quant = 5) %>%
+  filter(SampleID!=0) %>%
+  select(SampleID, lib_quant) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SampleID = str_replace(SampleID, "_ISAACS", "")) %>%
+  filter(lib_quant > 0) #remove entries with no lib quant/missing lib quant data
+  
+
+amp_files <- list.files(path = "/Users/vhogan/Documents/ARIA/RHE/quants", pattern = "*.xlsx", full.names = T) %>%
+  lapply(read_excel, sheet = 4, skip=39) %>%
+  bind_rows() %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(amp_quant = 5) %>%
+  filter(SampleID!=0) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SampleID = str_replace(SampleID, "_ISAACS", "")) %>%
+  select(SampleID, amp_quant)
+
+#check for duplicates
+amp_dup <- amp_files %>%
+  count(SampleID) %>%
+  filter(n>1)
+
+rtpcr <- read_excel("/Users/vhogan/Documents/ARIA/RHE/rtpcr/Crsp_entero_pcr_all_25Oct24.xlsx") %>%
+  mutate(SampleID = str_replace(SampleID, "-", "_"))
+
+#taxtriage output
+taxtriage_txt <- read.delim('/Users/vhogan/Documents/ARIA/RHE/taxtriage/taxtriage_output_240730-isaacs-16ffbd6acc-bt2-irregulartophits_report_all.organisms.report.txt') 
+
+taxtriage_clean <- taxtriage_txt %>%
+  select(`Detected.Organism`, `Specimen.ID`, `X..Reads.Aligned`) %>%
+  rename(detected = `Detected.Organism`,
+         SampleID = `Specimen.ID`,
+         Num = `X..Reads.Aligned`)%>%
+  filter(Num > 500) %>%
+  cbind(analysis = "TaxTriage")
+
+#join data, using different sampleID columns with slightly different format
+joined_data <- rhe_typer_cromwell %>%
+  left_join(lib_files, by = "SampleID") %>%
+  left_join(amp_files, join_by("SampleID")) %>% #combine using sampleID used in sequencing
+  filter(!grepl("NTC", SampleID)) %>%  #remove NTCs from data
+  filter(!grepl("COXA71", SampleID)) %>% #remove controls with duplicates (in amp_dup)
+  filter(!grepl("D68", SampleID)) %>% 
+  filter(!grepl("ECHO11", SampleID)) %>% 
+  left_join(rtpcr, join_by("SampleID"))
+  
+#Define samples with no fasta (no typer data)
+#mutate(`BLAST result` = ifelse(is.na(`BLAST result`), "No fasta", `BLAST result`)) %>%
+
+missing_fasta_cromwell <- amp_files %>%
+  filter(!grepl("NTC", SampleID)) %>%  #remove NTCs from data
+  filter(!grepl("COXA71", SampleID)) %>% #remove controls with duplicates (in amp_dup)
+  filter(!grepl("D68", SampleID)) %>% 
+  filter(!grepl("ECHO11", SampleID)) %>% 
+  left_join(rhe_typer_cromwell, by = "SampleID") %>%
+  left_join(rtpcr, join_by("SampleID")) %>%
+  left_join(lib_files, by = "SampleID") %>%
+  mutate(`BLAST.result` = ifelse(is.na(`BLAST.result`), "No fasta", `BLAST.result`)) %>%
+  filter(`BLAST.result` == "No fasta")
+```
+```{r}
+
+rhe_typer_comp <- rhe_typer_irma %>%
+  bind_rows(rhe_typer_cromwell) %>%
+  filter(grepl("^CRSP", SampleID))
+
+missing_cromwell <- rhe_typer_comp %>%
+  count(SampleID) %>% #count Sample ID (if two then sample is in both results)
+  filter (n == 1) %>% #just 1 means cromwell or irma is missing
+  left_join(rhe_typer_irma, by = "SampleID") %>% #add back in irma typer results
+  filter(!is.na(begin)) %>% #this would mean irma result is missing
+  left_join(rtpcr)
+
+
+missing_irma <- rhe_typer_comp %>%
+  count(SampleID) %>%
+  filter (n == 1) %>%
+  left_join(rhe_typer_cromwell, by = "SampleID") %>%
+  filter(!is.na(begin)) %>% #this would mean cromwell is missing
+  left_join(rtpcr)
+
+#add missing cromwell fastas to melt plot with length 0
+melt_missing_cromwell <- missing_cromwell %>%
+  select(SampleID) %>% 
+  mutate(workflow = 'Cromwell') %>%
+  mutate(variable = 'length') %>%
+  mutate(value = 0) 
+
+#add missing irma fastas to melt plot with length 0
+melt_missing_irma <- missing_irma %>%
+  select(SampleID) %>% 
+  mutate(workflow = 'IRMA') %>%
+  mutate(variable = 'length') %>%
+  mutate(value = 0) 
+
+```
+```{r, warning = FALSE}
+#Use melt function to create row for each subject/test type with Rp Ct
+melt_typer <- melt(rhe_typer_comp, id.vars= c('SampleID', 'workflow'), 
+                  measure.vars=c('length'))  %>%
+  bind_rows(melt_missing_cromwell) %>%
+  bind_rows(melt_missing_irma)
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+workflow_plot <- melt_typer %>%
+    ggplot(aes(x = workflow, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Fasta length comparison by workflow",
+          y = "length",
+          x = "workflow") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+workflow_plot
+```
+```{r, warning = FALSE}
+#Use melt function to create row for each subject/test type with Rp Ct
+melt_typer_blast <- melt(rhe_typer_comp, id.vars= c('SampleID', 'workflow'), 
+                  measure.vars=c('BLAST.score')) 
+
+melt_typer_blast_count <- melt_typer_blast %>%
+  count(SampleID)
+
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+workflow_blast_plot <- melt_typer_blast %>%
+    ggplot(aes(x = workflow, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "BLAST Score comparison by workflow",
+          y = "BLAST score",
+          x = "workflow") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "violetred", "springgreen3", "slateblue")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+workflow_blast_plot
+```
+
+### <span style="color: blue;">Rhino/Enterovirus RTPCR Assays</span>
+##### <span style="color: grey;">Two RTPCR assays were used to allow quantification to span the diversity of rhino/enteroviruses. In this document they are referred to as Entero and Rhino17. A comparison to the sequencing results should indicate if the assays can predict sequencing success for different rhino/entero virus types.</span>
+
+### <span style="color: blue;">Samples</span>
+##### <span style="color: grey;">Crsp001 through CRSP091 and one D68 control were sequenced on July 30. Amplicon and Library quant data were collected. Fasta files were run through a Enterovirus Genotyping Tool. Cts from both RTPCR assays were obtained for Crsp005-Crsp091 on July 23.</span>
+
+### <span style="color: blue;">Cts compared to Rhino/Entero type</span>
+##### <span style="color: gray;">Neither assay seems to distiguish between types, although many of the rhinovirus samples are negative on the entero assay (but not all).</span>
+<br>
+
+```{r, warning = FALSE}
+type_entero_ct_violin <- joined_data %>%
+  plot_ly(y=~Entero_Ct, x = ~`BLAST.result`,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          color = joined_data$`BLAST.result`,
+          #colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', joined_data$`SampleID`, 
+                        '</br>Entero Ct: ', joined_data$Entero_Ct,
+                        '</br>BLAST result: ', joined_data$`BLAST.result`),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='Entero Ct Values by BLAST result',
+         yaxis = list(title = 'Ct', range = c(0,40)),
+         xaxis = list(title = "BLAST result"))
+
+type_entero_ct_violin
+```
+```{r, warning = FALSE}
+type_entero_ct_violin_missing_cromwell <- missing_cromwell %>%
+  plot_ly(y=~Entero_Ct, x = ~`BLAST.result`,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          color = missing_cromwell$`BLAST.result`,
+          #colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', missing_cromwell$`SampleID`, 
+                        '</br>Entero Ct: ', missing_cromwell$Entero_Ct,
+                        '</br>BLAST result: ', missing_cromwell$`BLAST.result`),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='Entero Ct Values by BLAST result for IRMA fastas with no cromwell fasta',
+         yaxis = list(title = 'Ct', range = c(0,40)),
+         xaxis = list(title = "BLAST result"))
+
+type_entero_ct_violin_missing_cromwell
+```
+
+### <span style="color: blue;">Cts compared to sequence length</span>
+##### <span style="color: gray;"> Sequence length starts to drop off for Cts above 30, but inconsistently. Some genomes at higher Cts still have a nearly full length
+<br>
+
+```{r, warning = FALSE}
+length_entero_ct_scatter <- joined_data %>%
+  plot_ly(x=~Entero_Ct, y = ~length,
+          type = 'scatter', 
+          points = "all", 
+          color = joined_data$`BLAST.result`,
+          #colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', joined_data$`SampleID`, 
+                        '</br>Entero Ct: ', joined_data$Entero_Ct,
+                        '</br>length: ', joined_data$length),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='Entero Ct Values by BLAST result',
+         xaxis = list(title = 'Ct', range = c(0,40)),
+         yaxis = list(title = "length", range = c(0,8000)))
+
+length_entero_ct_scatter
+```
+### <span style="color: blue;">Amp Quant compared to Ct</span>
+
+```{r, warning=FALSE}
+amp_quant_entero_ct <- joined_data %>%
+  plot_ly(x=~Entero_Ct, y =~amp_quant) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = joined_data$`BLAST.result`, 
+
+            text = ~paste('</br>', joined_data$`SampleID`, 
+                          '</br>Entero Ct: ', joined_data$Entero_Ct,
+                          '</br>BLAST result: ', joined_data$`BLAST.result`),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Amplicon Quant vs. Entero CT Values',
+            yaxis = list(title = 'Amplicon Quant', tickvals = seq(0, 70, 10)), 
+            xaxis = list(title='Entero CT Values', tickvals = seq(0, 45, 5), showlegend = T),
+         autosize = F, width = 700, height = 500)
+
+amp_quant_entero_ct 
+```
+
+### <span style="color: blue;">BLAST Score compared to Ct</span>
+
+```{r, warning=FALSE}
+entero_ct_score <- joined_data %>%
+  plot_ly(x=~Entero_Ct, y =~`BLAST.score`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = joined_data$`BLAST.result`, 
+            text = ~paste('</br>', joined_data$`SampleID`, 
+                          '</br>Entero Ct: ', joined_data$Entero_Ct, 
+                          '</br>BLAST Score: ', joined_data$`BLAST.score`),
+            hoverinfo = 'text') %>%
+
+  layout(title ='BLAST Score vs. Entero CT Values',
+            yaxis = list(title = 'BLAST Score', tickvals = seq(0, 100, 10)), 
+            xaxis = list(title='Entero CT Values', tickvals = seq(0, 45, 5), showlegend = T),
+         autosize = F, width = 700, height = 500)
+
+entero_ct_score 
+```
+
+
+### <span style="color: blue;">BLAST Score compared to Amp Quant</span>
+
+<br>
+```{r, warning=FALSE}
+amp_quant_score <- joined_data %>%
+  plot_ly(x=~amp_quant, y =~`BLAST.score`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = ~`BLAST.result`, 
+            text = ~paste('</br>', joined_data$`SampleID`,
+                          '</br>BLAST Score: ', joined_data$`BLAST.score`),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Amplicon Quant vs. BLAST Score - Isaacs',
+            yaxis = list(title = 'BLAST Score', tickvals = seq(0, 100, 10)), 
+            xaxis = list(title='Amplicon Quant', tickvals = seq(0, 70, 10), showlegend = T),
+         autosize = F, width = 1000, height = 500)
+
+amp_quant_score 
+```
+### <span style="color: blue;">Results Table</span>
+
+```{r}
+rhe_datatable <- joined_data %>%
+  select(`SampleID`, amp_quant, lib_quant, begin, length, end, `BLAST.result`, `BLAST.score`, type, `type.support`, Entero_Ct)
+
+datatable(rhe_datatable, colnames= c("SampleID", "Amp quant", "Lib quant", "begin", "length", "end", "BLAST Result", "BLAST Score", "type", "type support", "Entero Ct"))
+```
+
+

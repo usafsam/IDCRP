@@ -1,0 +1,21 @@
+---
+title: "Coverage"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+
+#Coverage data file with headers: Reference_Name	Position	Coverage Depth	Consensus	Deletions	Ambiguous	Consensus_Count	Consensus_Average_Quality
+
+cov_data <- read.delim("/Users/vhogan/Documents/ARIA/Coverage/A_HA_H1-coverage.txt")
+
+total <- nrow(cov_data)
+
+covered <- cov_data %>%
+  filter(Coverage.Depth >= 10)
+
+percent <- nrow(covered)/nrow(cov_data)*100
+```

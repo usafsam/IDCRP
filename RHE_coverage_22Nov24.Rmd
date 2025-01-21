@@ -1,0 +1,252 @@
+---
+title: "Rhino-Entero Coverage"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(cowplot)
+library(readxl)
+library(plotly)
+
+```
+
+## Isaacs sequencing with viral-ngs workflow
+
+```{r}
+#list file path for each reference set
+runs_morerefs <- list.files(path = "/Users/vhogan/Documents/ARIA/RHE/Coverage/data/morerefs", full.names=TRUE)
+runs_refseq <- list.files(path = "/Users/vhogan/Documents/ARIA/RHE/Coverage/data/refseq", full.names=TRUE)
+
+#combine lists
+runs <- c(runs_morerefs, runs_refseq)
+
+#create empty data frame
+coverage_files <- data.frame()
+
+#read each text file in each file path and add to coverage_files dataframe. If it throws an error, check for empty text files
+for (path_i in runs){
+  coverage_files_i <- list.files(path = path_i, pattern = "*.txt", full.names=TRUE) %>%
+  lapply(read_tsv, col_names = c('Sample', 'Position', 'Reads'), col_types = "cdd", show_col_types = FALSE) %>%
+  bind_rows() %>%
+  mutate(run = path_i) %>%
+  mutate(run = str_replace(run, "/Users/vhogan/Documents/ARIA/RHE/Coverage/data/", "")) %>% #remove extra part of file path
+  unite(full_name, c(Sample,run), sep = "/", remove = FALSE) #full name to distinguish between duplicates across runs
+  
+  coverage_files <- coverage_files %>%
+    bind_rows(coverage_files_i)
+}
+
+#Group by full_name and find mean/sd, separate name back to Sample, reference set, and run name
+Sample_mean <- coverage_files %>%
+  group_by(full_name) %>%
+  summarise(mean=mean(Reads), sd=sd(Reads)) %>%
+  separate(full_name, c('Sample','reference_set', 'run_name'), sep = '/') 
+
+#Check for duplicates. Each sample should only have 2 rows (one for ref seq, one for more refs)
+Sample_count <- Sample_mean %>%
+  count(Sample) %>%
+  filter(n >2)
+
+```
+```{r, warning = FALSE}
+
+#Box plots with facet_wrap for each run. Plot mean for each referenceset
+Ref_plot <- Sample_mean %>%
+    ggplot(aes(x = reference_set, y = mean, fill = reference_set)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = Sample), linewidth=.2, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = Sample), size=1, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Average Reads per Reference Set on each Run",
+          y = "Mean Number of Reads",
+          x = "Reference Set") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "slateblue")) +
+    facet_wrap(~run_name)  +
+    theme(legend.position = "none", #remove legend
+          text=element_text(size=10))  
+
+Ref_plot
+```
+```{r}
+#Check for zeros:
+#List sample/reference/run for morerefs
+Samples_morerefs <- Sample_mean %>%
+  select(Sample, reference_set, run_name) %>%
+  unite(full_name, c(Sample, run_name),sep = '/') %>%
+  filter(reference_set == 'morerefs')
+
+#List sample/reference/run for refseq
+Samples_refseq <- Sample_mean %>%
+  select(Sample, reference_set, run_name) %>%
+  unite(full_name, c(Sample, run_name),sep = '/') %>%
+  filter(reference_set == 'refseq')
+
+#Join sample/reference/run from refseq, if na then refseq is missing
+#restructure to match Sample_mean dataframe
+Missing_refseq <- Samples_morerefs %>%
+  left_join(Samples_refseq, join_by('full_name')) %>%
+  filter(is.na(reference_set.y)) %>%
+  select(full_name) %>%
+  separate(full_name, c('Sample','run_name'), sep = '/') %>%
+  mutate(reference_set = 'refseq', .before = run_name) %>%
+  mutate(mean = 0) %>%
+  mutate(sd = 0)
+
+#Join sample/reference/run from moreseq, if na then moreseq is missing
+#restructure to match Sample_mean dataframe
+Missing_morerefs <- Samples_refseq %>%
+  left_join(Samples_morerefs, join_by('full_name')) %>%
+  filter(is.na(reference_set.y)) %>%
+  select(full_name) %>%
+  separate(full_name, c('Sample','run_name'), sep = '/') %>%
+  mutate(reference_set = 'morerefs', .before = run_name) %>%
+  mutate(mean = 0) %>%
+  mutate(sd = 0)
+
+#Add missing samples to Sample_mean df
+Sample_mean_w_zeros <- Sample_mean %>%
+  bind_rows(Missing_morerefs) %>%
+  bind_rows(Missing_refseq) 
+
+
+#Create same plots including missing samples as mean of 0
+Ref_plot_w_zeros <- Sample_mean_w_zeros %>%
+    ggplot(aes(x = reference_set, y = mean, fill = reference_set)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = Sample), linewidth=.2, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = Sample), size=1, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Average Reads per Reference Set on each Run (including zeros for missing samples)",
+          y = "Mean Number of Reads",
+          x = "Reference Set") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "slateblue")) +
+    facet_wrap(~run_name)  +
+    theme(legend.position = "none", #remove legend
+          text=element_text(size=10))  
+
+
+Ref_plot_w_zeros
+```
+```{r, warning = FALSE}
+#join other data, edit Sample names to match
+rhe_typer_cromwell <- list.files(path = "/Users/vhogan/Documents/ARIA/RHE/rhe_typer/", pattern = "*.csv", full.names=TRUE) %>%
+  lapply(read_csv, show_col_types = FALSE) %>%
+  bind_rows() %>%
+  rename(SampleID = name) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SampleID = str_replace(SampleID, "_ISAACS", "")) %>%
+  mutate(SampleID = str_replace(SampleID, "-", "_")) %>%
+  select(-`reverse complement`) 
+
+lib_files <-list.files(path = "/Users/vhogan/Documents/ARIA/RHE/quants", pattern = "*.xlsx", full.names = T) %>%
+  lapply(read_excel, sheet = 'Library Quant (C)', skip=40) %>%
+  bind_rows() %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(lib_quant = 5) %>%
+  filter(SampleID!=0) %>%
+  select(SampleID, lib_quant) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SampleID = str_replace(SampleID, "_ISAACS", "")) %>%
+  mutate(SampleID = str_replace(SampleID, "-", "_")) %>%
+  filter(lib_quant > 0) #remove entries with no lib quant/missing lib quant data
+  
+
+amp_files <- list.files(path = "/Users/vhogan/Documents/ARIA/RHE/quants", pattern = "*.xlsx", full.names = T) %>%
+  lapply(read_excel, sheet = 4, skip=39) %>%
+  bind_rows() %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(amp_quant = 5) %>%
+  filter(SampleID!=0) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SampleID = str_replace(SampleID, "_ISAACS", "")) %>%
+  mutate(SampleID = str_replace(SampleID, "-", "_")) %>%
+  select(SampleID, amp_quant)
+
+#check for duplicates
+amp_dup <- amp_files %>%
+  count(SampleID) %>%
+  filter(n>1)
+
+rtpcr <- read_excel("/Users/vhogan/Documents/ARIA/RHE/rtpcr/Crsp_entero_pcr_all.xlsx") %>%
+  mutate(SampleID = str_replace(SampleID, "-", "_"))
+
+d68_rtpcr <- read_excel("/Users/vhogan/Documents/ARIA/RHE/rtpcr/Crsp_D68_pcr_all.xlsx", sheet = 'data') %>%
+  mutate(SampleID = str_replace(SampleID, "-", "_"))
+
+joined_data <- Sample_mean_w_zeros %>%
+  rename(SampleID = Sample) %>%
+  mutate(SampleID = str_replace(SampleID, "-", "_")) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SampleID = str_replace(SampleID, "_ISAACS", "")) %>%
+  filter(grepl("CRSP", SampleID)  |grepl("CM", SampleID)) %>% #remove NTCs and controls
+  left_join(amp_files, by = join_by(SampleID)) %>%
+  left_join(lib_files, by = join_by(SampleID)) %>%
+  left_join(rtpcr, by = join_by(SampleID)) %>%
+  left_join(d68_rtpcr, by = join_by(SampleID)) %>%
+  select(-order, -Plate) %>%
+  left_join(rhe_typer_cromwell, by = join_by(SampleID))
+
+#check for duplicates - expecting n=2 (one for refseq on for moreseq)
+joined_data_count <- joined_data %>%
+  count(SampleID)
+
+```
+
+```{r, warning = FALSE}
+type_entero_ct_violin <- joined_data %>%
+  plot_ly(y=~Entero_Ct, x = ~`BLAST result`,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          color = joined_data$`BLAST result`,
+          text = ~paste('</br>', joined_data$`SampleID`, 
+                        '</br>Entero Ct: ', joined_data$Entero_Ct,
+                        '</br>BLAST result: ', joined_data$`BLAST result`,
+                        '</br>type: ', joined_data$`type`),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='Entero Ct Values by BLAST result',
+         yaxis = list(title = 'Ct', range = c(0,40)),
+         xaxis = list(title = "BLAST result"))
+
+type_entero_ct_violin
+```
+```{r, warning = FALSE}
+type_d68_ct_violin <- joined_data %>%
+  plot_ly(y=~D68_Ct, x = ~`BLAST result`,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          color = joined_data$`BLAST result`,
+          text = ~paste('</br>', joined_data$`SampleID`, 
+                        '</br>D68 Ct: ', joined_data$D68_Ct,
+                        '</br>BLAST result: ', joined_data$`BLAST result`,
+                        '</br>type: ', joined_data$`type`),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='D68 Ct Values by BLAST result',
+         yaxis = list(title = 'Ct', range = c(0,40)),
+         xaxis = list(title = "BLAST result"))
+
+type_d68_ct_violin
+```
+```{r}
+#export data files
+#write.csv(Sample_mean, "/Users/vhogan/Documents/ARIA/RHE/Coverage/CRSP_coverage.csv", row.names = FALSE, na = "")
+#write.csv(Sample_mean_w_zeros, "/Users/vhogan/Documents/ARIA/RHE/Coverage/CRSP_coverage_w_zeros.csv", row.names = FALSE, na = "")
+
+write.csv(joined_data, "/Users/vhogan/Documents/ARIA/RHE/Coverage/CRSP_combined_data.csv", row.names = FALSE, na = "")
+```
+
+

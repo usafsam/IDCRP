@@ -1,0 +1,223 @@
+---
+title: "Midnight vs Artic"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readxl)
+library(plotly)
+library(viridis)
+library(DT)
+library(reshape2)
+library(cowplot)
+library(lubridate)
+library(RColorBrewer)
+
+knitr::opts_chunk$set(echo = FALSE)
+```
+```{r}
+#load data
+performance <- read_excel("/Users/vhogan/Documents/ARIA/Midnight/231004_NB2_Artic_performance.xlsx", sheet = "midnight")  %>%
+  rename(SampleID = Sample) %>%
+  mutate(`%>=20x` = as.numeric(`%>=20x`))
+
+nextclade <- read_excel("/Users/vhogan/Documents/ARIA/Midnight/231004_NB2_Artic_lineage.xlsx", sheet = "Nextclade-midnight") %>%
+  rename(SampleID = seqName) %>%
+  mutate(qcoverallScore = as.numeric(qcoverallScore))
+
+pangolin <- read_excel("/Users/vhogan/Documents/ARIA/Midnight/231004_NB2_Artic_lineage.xlsx", sheet = "Pangolin-midnight")  %>%
+  rename(SampleID = taxon)
+
+lib_files <- read_excel("/Users/vhogan/Documents/ARIA/Midnight/20231003_wk39-Aria_v5-midv2-InfA-RSVB-ADVhex_KL.xlsx", 'Library Quant (C)', skip=40) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(lib_quant = 5) %>%
+  filter(SampleID!=0) %>%
+  filter(str_detect(SampleID, "^A")) %>%
+  select(SampleID, lib_quant)
+  
+
+amp_files <- read_excel(path = "/Users/vhogan/Documents/ARIA/Midnight/20231003_wk39-Aria_v5-midv2-InfA-RSVB-ADVhex_KL.xlsx", sheet = 4, skip=39) %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(amp_quant = 5) %>%
+  filter(SampleID!=0) %>%
+  filter(str_detect(SampleID, "^A")) %>%
+  select(SampleID, amp_quant)
+
+
+#join data, add discrete grouping of RP Cts, rename test_type
+#convert to date
+joined_data <- performance %>%
+  left_join(nextclade, by = "SampleID") %>%
+  left_join(pangolin, by = "SampleID") %>%
+  left_join(amp_files, by = "SampleID") %>%
+  left_join(lib_files, by = "SampleID") 
+
+```
+
+### <span style="color: blue;">Comparison of Amp Quant for same sample with Midnight vs Artic</span>
+
+```{r, warning = FALSE}
+#Use melt function to create row for each subject/primer set with Amp Quant
+amp_data_melt <- melt(joined_data, id.vars='SampleID', measure.vars=c('amp_quant')) %>%
+                 separate(SampleID, into = c("Sample", "Primer"), sep = "_") %>%
+                 mutate(Primer = case_when(Primer == "midV2" ~ "Midnight",
+                                            Primer == "v5" ~ "Artic"))
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+amp_plot <- amp_data_melt %>%
+    ggplot(aes(x = Primer, y = value, fill = Primer)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = Sample), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = Sample), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Amp Quant Comparison",
+          y = "Amp Quant",
+          x = "Primer Set") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "slateblue")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+amp_plot
+```
+
+### <span style="color: blue;">Comparison of Lib Quant for same sample with Midnight vs Artic</span>
+
+```{r, warning = FALSE}
+#Use melt function to create row for each subject/primer set with Amp Quant
+lib_data_melt <- melt(joined_data, id.vars='SampleID', measure.vars=c('lib_quant')) %>%
+                 separate(SampleID, into = c("Sample", "Primer"), sep = "_") %>%
+                 mutate(Primer = case_when(Primer == "midV2" ~ "Midnight",
+                                            Primer == "v5" ~ "Artic"))
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+lib_plot <- lib_data_melt %>%
+    ggplot(aes(x = Primer, y = value, fill = Primer)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = Sample), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = Sample), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Library Quant Comparison",
+          y = "Library Quant",
+          x = "Primer Set") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "slateblue")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+lib_plot
+```
+
+### <span style="color: blue;">Comparison of Percent Genome Coverage at 20x for same sample with Midnight vs Artic</span>
+
+```{r, warning = FALSE}
+#Use melt function to create row for each subject/primer set with Amp Quant
+cov_melt <- melt(joined_data, id.vars='SampleID', measure.vars=c('%>=20x')) %>%
+                 separate(SampleID, into = c("Sample", "Primer"), sep = "_") %>%
+                 mutate(Primer = case_when(Primer == "midV2" ~ "Midnight",
+                                            Primer == "v5" ~ "Artic"))
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+cov_plot <- cov_melt %>%
+    ggplot(aes(x = Primer, y = value, fill = Primer)) + 
+    #geom_boxplot() +
+    geom_line(aes(group = Sample), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = Sample), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Coverage Comparison (>100 = bad)",
+          y = "Coverage",
+          x = "Primer Set") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "slateblue")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+cov_plot
+```
+### <span style="color: blue;">Comparison of QC Overall Score for same sample with Midnight vs Artic</span>
+
+```{r, warning = FALSE}
+#Use melt function to create row for each subject/primer set with Amp Quant
+qc_data_melt <- melt(joined_data, id.vars='SampleID', measure.vars=c('qcoverallScore')) %>%
+                 separate(SampleID, into = c("Sample", "Primer"), sep = "_") %>%
+                 mutate(Primer = case_when(Primer == "midV2" ~ "Midnight",
+                                            Primer == "v5" ~ "Artic"))
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+qc_plot <- qc_data_melt %>%
+    ggplot(aes(x = Primer, y = value, fill = Primer)) + 
+    #geom_boxplot() +
+    geom_line(aes(group = Sample), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = Sample), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "QC Overall Score Comparison (>100 = bad)",
+          y = "QC Overall Score",
+          x = "Primer Set") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "slateblue")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+qc_plot
+```
+
+### <span style="color: blue;">Comparison of Total Missing for same sample with Midnight vs Artic</span>
+
+```{r, warning = FALSE}
+#Use melt function to create row for each subject/primer set with Amp Quant
+missing_melt <- melt(joined_data, id.vars='SampleID', measure.vars=c('totalMissing')) %>%
+                 separate(SampleID, into = c("Sample", "Primer"), sep = "_") %>%
+                 mutate(Primer = case_when(Primer == "midV2" ~ "Midnight",
+                                            Primer == "v5" ~ "Artic"))
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+missing_plot <- qc_data_melt %>%
+    ggplot(aes(x = Primer, y = value, fill = Primer)) + 
+    #geom_boxplot() +
+    geom_line(aes(group = Sample), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = Sample), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Total Missing Comparison (>100 = bad)",
+          y = "Total Missing Score",
+          x = "Primer Set") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("orangered", "slateblue")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+missing_plot
+```
+
+### <span style="color: blue;">Nextclade Comparison</span>
+##### <span style="color: grey;">All match except A10-08514-4-Ag and A10-08549-6-Ag are able to make more specific calls with Artic primers</span>
+
+```{r}
+nextclade <- joined_data %>%
+  select(SampleID, `%>=20x`, qcoverallScore, totalMissing, partiallyAliased) %>%
+  separate(SampleID, into = c("SampleID", "Primer"), sep = "_") %>%
+  mutate(Primer = case_when(Primer == "midV2" ~ "Midnight",
+                            Primer == "v5" ~ "Artic")) %>%
+  pivot_wider(names_from = c(Primer), values_from = partiallyAliased)
+
+datatable(nextclade, options = list(pageLength = -1)) #pageLength, showing all
+```
+
+### <span style="color: blue;">Pangolin Comparison</span>
+##### <span style="color: grey;">All match except A10-08549-6-Ag is unable to make a call with Midnight primers</span>
+
+```{r}
+pangolin <- joined_data %>%
+  select(SampleID, `%>=20x`, qcoverallScore, totalMissing, lineage) %>%
+  separate(SampleID, into = c("Sample", "Primer"), sep = "_") %>%
+  mutate(Primer = case_when(Primer == "midV2" ~ "Midnight",
+                            Primer == "v5" ~ "Artic")) %>%
+  pivot_wider(names_from = c(Primer), values_from = lineage)
+
+datatable(pangolin, options = list(pageLength = -1))
+```
+

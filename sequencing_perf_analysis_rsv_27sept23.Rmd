@@ -1,0 +1,228 @@
+---
+title: "RSV Ct and Sequencing Results"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(stringr)
+library(readxl)
+library(plotly)
+library(reshape2)
+library(cowplot)
+library(viridis)
+
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE)
+```
+```{r}
+#load data
+
+ct_data <- read_excel(path = "/Users/vhogan/Documents/ARIA/RSV/20240312_RSV271_342_VH.xlsx", sheet = "data") %>%
+  mutate(SampleID = str_replace_all(SampleID, "-", ""))
+
+luminex_results <- read_excel(path = "/Users/vhogan/Documents/ARIA/RSV/rsv-key.xlsx") %>%
+  rename(SampleID = ID)
+
+nextclade_results <- read_excel(path = "/Users/vhogan/Documents/ARIA/RSV/240313_RSV_nextclade.xlsx", sheet = "Sheet1")
+
+nexclade_results_a <- nextclade_results %>%
+  filter(type == "A") %>%
+  rename(SampleID = seqName)
+
+
+nexclade_results_b <- nextclade_results %>%
+  filter(type == "B") %>%
+  rename(SampleID = seqName)
+
+lib_files_rsva <-read_excel(path = "/Users/vhogan/Documents/ARIA/RSV/20240227_RSV-A-274-340.xlsx", sheet = 10, skip=40) %>%
+  rename(SampleID = `Sample ID`) %>%
+  mutate(SampleID = str_replace_all(SampleID, "_rsvA", "")) %>%
+  mutate(SampleID = str_replace_all(SampleID, "-", "")) %>%
+  rename(lib_quant_a = `ng/µL`) %>%
+  filter(SampleID!=0) %>%
+  select(SampleID, lib_quant_a)
+
+lib_files_rsvb <-read_excel(path = "/Users/vhogan/Documents/ARIA/RSV/20240227_RSV-B-274-340.xlsx", sheet = 10, skip=40) %>%
+  rename(SampleID = `Sample ID`) %>%
+  mutate(SampleID = str_replace_all(SampleID, "_rsvB", "")) %>%
+  mutate(SampleID = str_replace_all(SampleID, "-", "")) %>%
+  rename(lib_quant_b = `ng/µL`) %>%
+  filter(SampleID!=0) %>%
+  select(SampleID, lib_quant_b)
+
+amp_files_rsva <-read_excel(path = "/Users/vhogan/Documents/ARIA/RSV/20240227_RSV-A-274-340.xlsx", sheet = 4, skip=39) %>%
+  rename(SampleID = `Sample ID`) %>%
+  mutate(SampleID = str_replace_all(SampleID, "_rsvA", "")) %>%
+  mutate(SampleID = str_replace_all(SampleID, "-", "")) %>%
+  rename(amp_quant_a = `ng/µL`) %>%
+  filter(SampleID!=0) %>%
+  select(SampleID, amp_quant_a)
+
+amp_files_rsvb <-read_excel(path = "/Users/vhogan/Documents/ARIA/RSV/20240227_RSV-B-274-340.xlsx", sheet = 4, skip=39) %>%
+  rename(SampleID = `Sample ID`) %>%
+  mutate(SampleID = str_replace_all(SampleID, "_rsvB", "")) %>%
+  mutate(SampleID = str_replace_all(SampleID, "-", "")) %>%
+  rename(amp_quant_b = `ng/µL`) %>%
+  filter(SampleID!=0) %>%
+  select(SampleID, amp_quant_b)
+
+rsva_data <- left_join(ct_data, amp_files_rsva, by = "SampleID") %>%
+  left_join(lib_files_rsva, by = "SampleID") %>%
+  filter(!is.na(amp_quant_a)) %>%
+
+  left_join(nexclade_results_a, by = "SampleID") %>%
+  left_join(luminex_results, by = "SampleID")
+  
+
+rsvb_data <- left_join(ct_data, amp_files_rsvb, by = "SampleID") %>%
+  left_join(lib_files_rsvb, by = "SampleID") %>%
+  filter(!is.na(amp_quant_b)) %>%
+  #rename(amp_quant = amp_quant_b) %>%
+  #rename(lib_quant = lib_quant_b) %>%
+  left_join(nexclade_results_b, by = "SampleID") %>%
+  left_join(luminex_results, by = "SampleID")
+
+data_joined <- rsva_data %>%
+  full_join(rsvb_data, by = join_by(SampleID, Ct, type, clade, G_clade, qcoverallScore, qcoverallStatus, totalSubstitutions, totalDeletions, totalInsertions, totalFrameShifts, totalMissing, totalNonACGTNs, totalAminoacidSubstitutions, totalAminoacidDeletions, totalAminoacidInsertions, totalUnknownAa, alignmentScore, alignmentStart, alignmentEnd, coverage, isReverseComplement, substitutions, deletions, insertions, frameShifts, aaSubstitutions, aaDeletions, aaInsertions, privateNucMutationsreversionSubstitutions, privateNucMutationslabeledSubstitutions, privateNucMutationsunlabeledSubstitutions, privateNucMutationstotalReversionSubstitutions, privateNucMutationstotalLabeledSubstitutions, privateNucMutationstotalUnlabeledSubstitutions, privateNucMutationstotalPrivateSubstitutions, missing, unknownAaRanges, nonACGTNs, qcmissingDatamissingDataThreshold, qcmissingDatascore, qcmissingDatastatus, qcmissingDatatotalMissing, qcmixedSitesmixedSitesThreshold, qcmixedSitesscore, qcmixedSitesstatus, qcmixedSitestotalMixedSites, qcprivateMutationscutoff, qcprivateMutationsexcess, qcprivateMutationsscore, qcprivateMutationsstatus, qcprivateMutationstotal, qcsnpClustersclusteredSNPs, qcsnpClustersscore, qcsnpClustersstatus, qcsnpClusterstotalSNPs, qcframeShiftsframeShifts, qcframeShiftstotalFrameShifts, qcframeShiftsframeShiftsIgnored, qcframeShiftstotalFrameShiftsIgnored, qcframeShiftsscore, qcframeShiftsstatus, qcstopCodonsstopCodons, qcstopCodonstotalStopCodons, qcstopCodonsscore, qcstopCodonsstatus, totalPcrPrimerChanges, pcrPrimerChanges, failedCdses, warnings, errors, Result, Season, `Sequenced with`, Date, Seq_note)) 
+  
+```
+```{r}
+#Check for specimens with missing data
+#missing_lib <- data_joined %>%
+#  filter(is.na(lib_quant))
+
+```
+
+```{r}
+amp_quant_ct <- data_joined %>%
+  plot_ly(x=~Ct, y =~amp_quant_a) %>%
+            add_trace(
+            name = "RSV A",
+            type = 'scatter', 
+            mode = 'markers', 
+            #color = data_joined$Result, 
+            #marker = list(symbol = "triangle-up", size = 7),
+            #colors = c('green', 'black', 'orange', 'red'),
+            text = ~paste('</br>', data_joined$SampleID, '</br>RSv Ct: ', data_joined$Ct),
+            hoverinfo = 'text') %>%
+  
+  add_trace(x=~Ct, y =~amp_quant_b,
+            name = "RSV B",
+            type = 'scatter', 
+            mode = 'markers', 
+            #color = data_joined$Result,
+            #marker = list(symbol = "square-cross", size = 7),
+            #colors = brewer.pal(length(data_joined),"Paired"),
+            text = ~paste('</br>', data_joined$SampleID, '</br>RSv Ct: ', data_joined$Ct),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Amplicon Quant vs. RSV CT Values',
+         #showlegend = FALSE,
+            yaxis = list(title = 'Amplicon Quant (ng/µL)', tickvals = seq(0, 110, 5)), 
+            xaxis = list(title='RSV CT Values', tickvals = seq(0, 45, 5)))
+
+amp_quant_ct 
+```
+
+
+```{r}
+lib_quant_ct <- data_joined %>%
+  plot_ly(x=~Ct, y =~lib_quant_a) %>%
+            add_trace(
+            name = "RSV A",
+            type = 'scatter', 
+            mode = 'markers', 
+            #color = data_joined$RP_discrete, 
+            #colors = c('green', 'black', 'orange', 'red'),
+            text = ~paste('</br>', data_joined$SampleID, '</br>RSv Ct: ', data_joined$Ct),
+            hoverinfo = 'text') %>%
+  
+  add_trace(x=~Ct, y =~lib_quant_b,
+            name = "RSV B",
+            type = 'scatter', 
+            mode = 'markers', 
+            #color = data_joined$RP_discrete, 
+            #colors = c('green', 'black', 'orange', 'red'),
+            text = ~paste('</br>', data_joined$SampleID, '</br>RSv Ct: ', data_joined$Ct),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Library Quant vs. RSV CT Values',
+            yaxis = list(title = 'Libraru Quant (ng/µL)', tickvals = seq(0, 110, 5)), 
+            xaxis = list(title='RSV CT Values', tickvals = seq(0, 45, 5), showlegend = T))
+
+lib_quant_ct 
+```
+```{r}
+ct_coverage <- data_joined %>% 
+   plot_ly(
+     x =  ~ Ct,
+     y =  ~ `coverage`,
+     
+     type = 'scatter',
+     mode = 'markers',
+     color = data_joined$type,
+     text = ~paste('</br>', data_joined$SampleID, 
+                   '</br>RSV Ct: ', data_joined$Ct, 
+                   '</br>clade: ', data_joined$clade),
+     hoverinfo = 'text') %>%
+  
+   layout(
+     title = "Coverage vs. CT Values",
+     legend=list(title=list(text='  Type')),
+     yaxis = list(
+       title = 'Coverage',
+       tickvals = seq(0, 1, 0.05)),
+     xaxis = list(
+       title = 'RSV CT Values',
+       tickvals = seq(0, 45, 5)),
+     autosize = F, width = 800, height = 500)
+     
+ ct_coverage
+```
+
+```{r, message=FALSE, warning=FALSE}
+ct_genome_qc <- data_joined %>% 
+   plot_ly(x =  ~ Ct, y =  ~ `coverage`) %>%
+     add_trace(type = 'scatter',
+     mode = 'markers',
+     marker = list(
+       color = ~`qcoverallScore`,
+       opacity = 0.9,
+       colorscale = "Viridis",
+       reversescale =T,
+       autocolorscale = FALSE, 
+       cauto = FALSE,
+       coloraxis= list(cmin=0, cmax=100), #Trying to set min and max and color scale, but not working
+       colorbar =list(title="QC Overall Score")),
+     text = ~paste('</br>', SampleID, '</br>RSV Ct: ', data_joined$Ct, 
+                   '</br>QC Overall Score: ', `qcoverallScore`,
+                   '</br>clade: ', data_joined$clade),
+     hoverinfo = 'text') %>% 
+  
+   layout(
+     title = "Ct vs Coverage",
+     yaxis = list(
+       title = 'Coverage',
+       tickvals = seq(0, 1, 0.05)),
+     xaxis = list(
+       title = 'SC2 CT Values',
+       tickvals = seq(0, 45, 5)),
+     autosize = F, width = 800, height = 500)
+
+     
+ ct_genome_qc
+```
+```{r}
+clades <- data_joined %>%
+  count(clade)
+
+clade_plot <- clades %>%
+  ggplot(aes(x=clade, y = n)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 60, hjust=1))
+
+clade_plot
+```
+```
