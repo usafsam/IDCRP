@@ -1,2 +1,2 @@
-# ARIA
-Collection of R scripts used during ARIA (2022-2024)
+# IDCRP
+Collection of R scripts used during IDCRP projects EPICC and ARIA (2022-2024)
