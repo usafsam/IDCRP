@@ -1,0 +1,47 @@
+---
+title: "Separate Twist from non-Twist output of kraken reports"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(writexl)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+#upload twist list from Vivian's taxonomy.rmd script
+twist_list <- read_delim('/Users/vhogan/Documents/WW/taxonomy/Twist_TaxIDs.csv', col_types = "icicc")
+
+#define column names of kraken reports
+colNames <- c('Percent', 'Num_fragments_covered', 'Num_fragments_assigned', 'Rank', 'NCBI_ID', 'Name') #define col names for output df
+
+#upload all kraken reports in a folder
+all_txt_files <-list.files('/Users/vhogan/Documents/WW/kraken_output/', pattern = "*.txt", full.names = T) %>% #list all txt files in folder (report files)
+  setNames(nm = .) %>%                      #add file location as column
+  map_dfr(~read_delim(.x, 
+                      delim = "\t",         #make dataframe from reading files
+                      show_col_types = FALSE,
+                      col_names = colNames), .id = "SampleID") %>%
+  mutate(Percent = as.numeric(Percent)) %>%
+  mutate(SampleID = str_remove(SampleID, "_report.txt$")) %>% #simplify file names
+  mutate(SampleID = str_remove(SampleID, ".txt")) %>% 
+  mutate(SampleID = str_remove(SampleID, "/Users/vhogan/Documents/WW/kraken_output/"))      #remove file path from sample IDs
+```
+```{r}
+#separate twist and non-twist output by comparing to Taxon ID column in twist list
+twist_output <- all_txt_files %>%
+  filter(NCBI_ID %in% twist_list$`Taxon Id`)
+
+non_twist_output <- all_txt_files %>%
+  filter(!(NCBI_ID %in% twist_list$`Taxon Id`))
+```
+```{r}
+#write xlsx files with output
+write_xlsx(twist_output, "/Users/vhogan/Documents/WW/kraken_output/WW_twist_output.xlsx")
+write_xlsx(non_twist_output, "/Users/vhogan/Documents/WW/kraken_output/WW_non_twist_output.xlsx")
+```
+
+

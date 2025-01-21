@@ -1,0 +1,111 @@
+---
+title: "NCBI_taxonomy"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(readxl)
+library(fuzzyjoin)
+library(stringr)
+
+```
+```{r}
+#Upload files of ncbi database id (downloaded from https://www.uniprot.org/taxonomy/?query=*)
+
+bacteria <- read_delim("/Users/vhogan/Documents/WW/taxonomy/taxonomy_AND_superkingdom_Bacteria_2024_12_13.tsv", 
+                       col_types = "iccccc")
+
+virus <- read_delim("/Users/vhogan/Documents/WW/taxonomy/taxonomy_AND_superkingdom_Viruses_2024_12_13.tsv",
+                    col_types = "iccccc")
+
+#upload twist list, make lowercase then select only unique species listed  
+twist <- read_xlsx("/Users/vhogan/Documents/WW/Comprehensive_Viral_Panel_Species-Strains.xlsx", 
+                   col_types = "text", sheet = "Species", skip = 1) %>%
+  select(Species) %>%
+  mutate(Species = tolower(Species)) %>%
+  unique()
+
+#upload problem ID list (Species that fail to match in script)
+problem_ids <- read_csv("/Users/vhogan/Documents/WW/taxonomy/problem_ids.csv", col_types = "ic")
+
+#bacteria and virus together
+#separate Other Names into the first name, and all others
+all_ncbi <- bacteria %>%
+  bind_rows(virus) %>%
+  mutate(`Other Names` = gsub("\\[", "", `Other Names`)) %>% #remove paratheses and brackets, they anger fuzzyjoin
+  mutate(`Other Names` = gsub("\\]", "", `Other Names`)) %>%
+  mutate(`Other Names` = gsub("\\(", "", `Other Names`)) %>%
+  mutate(`Other Names` = gsub("\\)", "", `Other Names`)) %>%
+  mutate(`Other Names` = gsub("\\{", "", `Other Names`)) %>%
+  mutate(`Other Names` = gsub("\\}", "", `Other Names`)) %>%
+  mutate(`Other Names` = tolower(`Other Names`)) %>%
+  mutate(`Scientific name` = tolower(`Scientific name`)) %>%
+  separate_wider_delim(`Other Names`, ",",
+                       names = c("other_name_1", "other_names"),
+                       too_few = "align_start", 
+                       too_many = "merge")
+
+#left join twist list with ncbi IDs based on scientific name
+twist_w_ids <- twist %>%
+  left_join(all_ncbi, join_by(Species == `Scientific name`) ) %>%
+  filter(!is.na(Species)) #why are these here?
+
+#Identify species that do not match a scientific name (572)
+no_match_1 <- twist_w_ids %>%
+  filter(is.na(`Taxon Id`)) %>%
+  select(Species)
+
+#Join species with the first "other name" 
+other_name_1_join <- no_match_1 %>%
+  left_join(all_ncbi, join_by(Species == other_name_1))
+
+#Identify species that do not match a scientific name or the first "other name" (162)
+no_match_2 <- other_name_1_join %>%
+  filter(is.na(`Taxon Id`)) %>%
+  select(Species)
+
+#this is slow - match remaining species with any of the remaining "other name" - slow b/c using regex
+other_names_join <- regex_right_join(all_ncbi, no_match_2,
+             by = c("other_names" = "Species"))
+
+#Identify species that still do not match to any tax Ids. Identify these by hand by searching https://www.ncbi.nlm.nih.gov/Taxonomy/Browser (should be less than 10) then upload as problem_ids.csv
+no_match_3 <- other_names_join %>%
+  filter(is.na(`Taxon Id`)) %>%
+  select(Species)
+
+#Join the problematic ids to all_ncbi data
+problem_id_join <- no_match_3 %>%
+  left_join(problem_ids, by = join_by(Species)) %>%
+  left_join(all_ncbi, by = join_by(`Taxon Id`))
+
+#all matches together 
+all_data <- twist_w_ids %>%
+  bind_rows(other_name_1_join) %>%
+  bind_rows(other_names_join) %>%
+  bind_rows(problem_id_join) %>%
+  filter(!is.na(`Taxon Id`))
+
+#manually fix duplicates (matched to more than one ID)
+dups <- all_data %>%
+  group_by(Species) %>%
+  count() %>%
+  filter(n>1)
+
+all_data_no_dups <- all_data %>%
+  filter((Species == "avian avulavirus 1" & `Taxon Id` == 2560319) | Species != "avian avulavirus 1") %>%
+  filter((Species == "barley yellow dwarf virus kerii" & `Taxon Id` == 2169987) | Species != "barley yellow dwarf virus kerii") %>%
+  filter((Species == "barley yellow dwarf virus pav" & `Taxon Id` == 2169986) | Species != "barley yellow dwarf virus pav") %>%
+  filter((Species == "human alphaherpesvirus 1" & `Taxon Id` == 10298) | Species != "human alphaherpesvirus 1") %>%
+  filter((Species == "pigeon circovirus" & `Taxon Id` == 1414603) | Species != "pigeon circovirus") %>%
+  filter((Species == "reticuloendotheliosis virus" & `Taxon Id` == 11636) | Species != "reticuloendotheliosis virus") %>%
+  filter((Species == "	
+severe acute respiratory syndrome-related coronavirus" & `Taxon Id` == 694009) | Species != "	
+severe acute respiratory syndrome-related coronavirus") 
+
+write.csv(all_data_no_dups, "/Users/vhogan/Documents/WW/taxonomy/Twist_TaxIDs.csv")
+```
+
