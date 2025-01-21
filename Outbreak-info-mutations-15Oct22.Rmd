@@ -1,0 +1,431 @@
+---
+title: "Outbreak.info"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(outbreakinfo)
+library(tidyverse)
+library(purrr)
+library(stringr)
+library(readxl)
+library(lubridate)
+library(plotly)
+library(RColorBrewer)
+library(ggpubr)
+knitr::opts_chunk$set(echo = FALSE)
+
+#Provide GISAID credentials using 
+authenticateUser() #vivhogan #hint: 09
+```
+```{r, warning=FALSE}
+#load epicc data
+epicc_data_og <- read_excel(path = "/Users/vhogan/Documents/EPICC/Outbreak-info/EPICC_Data_Pull_VH_16Jun22.xlsx")
+
+epicc_data <- epicc_data_og %>%
+  filter(!is.na(aaSubstitutions)) %>% #remove entries with no aa substitutions
+  mutate(aaSubstitutions = tolower(aaSubstitutions)) %>% #convert to lower case to match outbreak.info
+  filter(lineage== "Unassigned") %>%
+  separate(aaSubstitutions, c(paste0("aa", c(1:50))), sep = ",", extra = "warn", fill = "right", remove = FALSE) %>%
+      #separate aa subsitutions into up to 50 columns
+  filter(!is.na(`Collection Date`)) %>% #remove sample with no collection date
+  mutate(`Collection Date` = as.character(`Collection Date`))  #convert to date
+
+paived_data <- read_excel(path = "/Users/vhogan/Documents/EPICC/Outbreak-info/PAIVED_S04_6293_data_pull.xlsx") %>%
+  mutate(aaSubstitutions = tolower(aaSubstitutions)) %>% #convert to lower case to match outbreak.info
+  separate(aaSubstitutions, c(paste0("aa", c(1:50))), sep = ",", extra = "warn", fill = "right", remove = FALSE) %>%
+      #separate aa subsitutions into up to 50 columns
+  mutate(`Collection Date` = as.character(`Collection Date`)) %>% #convert to date
+  mutate(SampleID = PAIVED_Season4_metadata.SampleID)
+```
+
+```{r}
+# Get the prevalence of all circulating lineages in US by date
+us_lineages = getAllLineagesByLocation(location = "United States", ndays = 1000, other_threshold = 0.005) 
+```
+```{r}
+#function to empty output df
+clear_output <- function(){
+  lineage_call <<- data.frame(SampleID = character(),
+                     lineage = character(),
+                     Prob_lin_given_mut = double(), 
+                     mutation = character(),
+                     notes = character())
+}
+```
+
+```{r}
+mut_function <- function(date, mutation, id, messages=FALSE){
+  
+  #use lubridate to find max and min day within 2 weeks (+/- 1 week)
+  max_date <- ymd(date) + weeks(1)     
+  min_date <- ymd(date) - weeks(1)
+  print(seq(as.Date(min_date), as.Date(max_date), by = "1 day"))
+  
+  #split mutation to give only gene
+  gene <- strsplit(mutation, ":") %>% 
+  simplify() %>% 
+  first() %>% #select first entry = gene
+  str_to_title() #capitalize first letter to match when plotting
+  
+  #change Orf to ORF to match when plotting
+  gene <- sub("Orf", "ORF", gene) 
+  
+  #filter lineages within 2 weeks of collection date
+  us_lin_date <- us_lineages %>% 
+    filter(date < max_date) %>% 
+    filter(date > min_date)
+  
+  #print(us_lin_date)
+  
+  #count occurrences of each lineage in 2 week span
+  #average rolling prevalence ... is this a legit way to calculate this?
+  date_lineages <-us_lin_date %>%
+    group_by(lineage) %>% 
+    summarize(number = sum(lineage_count), avg_prev = mean(prevalence_rolling)) 
+                  
+  #add percent column and keep only >1% prevalence
+  date_lineages <- date_lineages %>%
+    mutate(percent = round(number/sum(date_lineages$number)*100, 1)) %>% #calculate percent of each lineage
+    filter(percent > 1 | avg_prev > 1) #filter only lineages >1% or prev >1%
+  
+  #print(date_lineages)
+  
+  #stats of mutations for each leaneage, use to calculate probability of mutation here and plot heat map later
+  char_muts <- getMutationsByLineage(pangolin_lineage = date_lineages$lineage)
+  
+  #select only given mutation
+  char_muts_of_mutation <- char_muts %>%
+    rename(mut = mutation) %>%
+    filter(mut == mutation)
+  #print(char_muts_of_mutation)
+  
+  #calculate probability of given mutation
+  Sum_mutation <- sum(char_muts_of_mutation$mutation_count)
+  
+  ####
+  #Lineage plot
+  #Option to provide zoom in of lineage over time plot
+  #us_lin_date <- us_lin_date %>%
+  #  filter(prevalence_rolling > 0.01) #remove prevalence rolling less than 0.01
+  
+  #cols <-  length(unique(us_lin_date$lineage)) #define number of colors based on number of lineages in us_lin_date
+  #mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(cols) #create color palette that number of lineages
+  
+  
+  #plot lineages in time period based on code for plotAllLineagesbyLocation
+  #plot_lin <- ggplot(us_lin_date, aes(x=date, y=prevalence_rolling, group=lineage, fill=lineage)) +
+  #      geom_area(colour = "#555555", size = 0.2) +
+  #      scale_x_date(date_labels = "%b %Y", expand = c(0,0)) +
+  #      scale_y_continuous(labels = scales::percent, expand = c(0,0)) +
+  #      scale_fill_manual(values = mycolors) +
+  #      theme_minimal() +
+  #      labs(caption="Enabled by data from GISAID (https://gisaid.org/)") +
+  #      theme(legend.position = "bottom", legend.background = element_rect(fill = "#eeeeec", colour = NA),
+  #            panel.grid = element_blank(),
+  #            axis.ticks = element_line(size = 0.5, colour = "#555555"), axis.ticks.length = unit(5, "points"),
+  #            axis.title = element_blank()) +
+  #            theme(legend.position = "bottom", axis.title = element_blank(), plot.caption = element_text(size = 10))
+  
+  
+  
+  #Bar plot with percent of each lineage
+  plot_lin_bar <- ggplot(date_lineages, aes(x = percent, y = lineage, fill = lineage)) +
+    geom_col() +
+    theme_minimal() +
+    labs(title = paste("Lineages within 2 weeks of", date),
+         caption="Enabled by data from GISAID (https://gisaid.org/)") +
+    scale_x_continuous(limits = c(0,100)) +
+    theme(legend.position = 'none',
+          panel.grid = element_blank(),
+          plot.caption = element_text(size = 10))
+  ####
+  
+  #empty result matrix
+  result <- data.frame(date = as.Date(character(), origin = lubridate::origin),
+                       mutation = character(),
+                       match = character(),
+                       Num_lin = double(),
+                       match_roll_prev = double(),
+                       Prob_mut_given_lin = double())
+
+  
+  #find matching mutation in each lineage with >1% prevalence
+  for(lineage in date_lineages$lineage){ 
+    #print(lineage)
+    mut_by_lin <- getMutationsByLineage(pangolin_lineage = lineage) #outbreak.info get mutations for each lineage
+    #print(mut_by_lin) 
+    match <- ifelse(mutation %in% mut_by_lin$mutation, mut_by_lin$lineage, NA) #check for matching mutation
+    Num_lin <- char_muts_of_mutation[char_muts_of_mutation$lineage == match, 3] #for lineage with matching mutation, find %
+    match_roll_prev <- date_lineages[date_lineages$lineage == match, 3] #and rolling prevalence
+    Prob_mut_given_lin <- mut_by_lin[mut_by_lin$mutation == mutation, 11] #for mutation in given lineage, find % prevalence
+    if(!is.na(match)){
+      print(paste("The lineage", match, "has", round(match_roll_prev,2), "prevalence within two weeks of", date, "and contains mutation", mutation, "with a prevalence of", round(Prob_mut_given_lin, 2)))
+      result[nrow(result) + 1,] <- c(date, mutation, match, Num_lin, match_roll_prev, Prob_mut_given_lin)
+          #add results to result df
+    } else{
+      #print("No match") #print when no matching mutation found
+    }
+  }
+  
+  #Bayes theorem
+  if(nrow(result) == 0){ #when no matches result has zero rows
+    print(paste("No matches for",mutation, "within 2 weeks of", date))
+    lineage_call[nrow(lineage_call) + 1,] <<- c(id, NA, NA, mutation, "no match")
+    #Sys.sleep(1) #sleep time to not exceed API usage limit
+  } 
+  
+  if(nrow(result) > 0){
+    result <- result %>%
+      mutate(Prob_lin_given_mut = result$Prob_mut_given_lin*result$Num_lin/Sum_mutation) #bayes
+    best_lineage <- result %>%
+      slice_max(Prob_lin_given_mut)
+    #if(best_lineage$Prob_lin_given_mut > 0.5){
+    lineage_call[nrow(lineage_call) + 1,] <<- c(id, best_lineage$match, best_lineage$Prob_lin_given_mut, mutation, NA)
+    #}
+  }
+
+  #print results:
+  if(nrow(result) > 0){ #print plot for any sample with matching lineages
+      #print matching lineages + stats
+      print(result)
+  
+      ####
+      #plot heat map of mutations in lineages within time span
+      #char_muts found earlier
+
+      plot_mut <- plotMutationHeatmap(char_muts, gene2Plot = gene, lightBorders = FALSE) +
+        theme(plot.caption = element_text(size = 0),
+              legend.position = "right",
+              axis.text.x = element_text(angle = 45, vjust = 0.9, hjust=1, size = 7)) +
+        labs(title = paste("Prevalance of", gene, "mutations" ),
+             subtitle = paste("in lineages present within 2 weeks of", date))
+  
+      ####
+
+    #mutation heat map and lineage prevalence together
+    joined_plot <<- ggarrange(plot_mut, plot_lin_bar, nrow = 2, heights = c(1.5,1))
+    print(annotate_figure(joined_plot, top = text_grob(paste(id, ": ", mutation, ", Probability = ", round(best_lineage$Prob_lin_given_mut, 2)), 
+               color = "blue", face = "bold", size = 14)))
+
+  }
+}
+```
+
+```{r}
+mut_function_no_plot <- function(date, mutation, id, messages=FALSE){
+  #use lubridate to find max and min day within 2 weeks (+/- 1 week)
+  max_date <- ymd(date) + weeks(1)     
+  min_date <- ymd(date) - weeks(1)
+  #print(seq(as.Date(min_date), as.Date(max_date), by = "1 day"))
+  
+  #split mutation to give only gene
+  gene <- strsplit(mutation, ":") %>% 
+  simplify() %>% 
+  first() %>% #select first entry = gene
+  str_to_title() #capitalize first letter to match when plotting
+  
+  #change Orf to ORF to match when plotting
+  gene <- sub("Orf", "ORF", gene) 
+  
+  #filter lineages within 2 weeks of collection date
+  us_lin_date <- us_lineages %>% 
+    filter(date < max_date) %>% 
+    filter(date > min_date)
+  
+  #print(us_lin_date)
+  
+  #count occurrences of each lineage in 2 week span
+  #average rolling prevalence ... is this a legit way to calculate this?
+  date_lineages <-us_lin_date %>%
+    group_by(lineage) %>% 
+    summarize(number = sum(lineage_count), avg_prev = mean(prevalence_rolling)) 
+                  
+  #add percent column and keep only >1% prevalence
+  date_lineages <- date_lineages %>%
+    mutate(percent = round(number/sum(date_lineages$number)*100, 1)) %>% #calculate percent of each lineage
+    filter(percent > 1 | avg_prev > 1) #filter only lineages >1% or prev >1%
+  
+  #print(date_lineages)
+  
+  #stats of mutations for each leaneage, use to calculate probability of mutation here and plot heat map later
+  char_muts <- getMutationsByLineage(pangolin_lineage = date_lineages$lineage)
+  
+  #select only given mutation
+  char_muts_of_mutation <- char_muts %>%
+    rename(mut = mutation) %>%
+    filter(mut == mutation)
+  #print(char_muts_of_mutation)
+  
+  #calculate probability of given mutation
+  Sum_mutation <- sum(char_muts_of_mutation$mutation_count)
+  
+  #empty result matrix
+  result <- data.frame(date = as.Date(character(), origin = lubridate::origin),
+                       mutation = character(),
+                       match = character(),
+                       Num_lin = double(),
+                       match_roll_prev = double(),
+                       Prob_mut_given_lin = double())
+
+  
+  #find matching mutation in each lineage with >1% prevalence
+  for(lineage in date_lineages$lineage){ 
+    #print(lineage)
+    mut_by_lin <- getMutationsByLineage(pangolin_lineage = lineage) #outbreak.info get mutations for each lineage
+    #print(mut_by_lin) 
+    match <- ifelse(mutation %in% mut_by_lin$mutation, mut_by_lin$lineage, NA) #check for matching mutation
+    Num_lin <- char_muts_of_mutation[char_muts_of_mutation$lineage == match, 3] #for lineage with matching mutation, find %
+    match_roll_prev <- date_lineages[date_lineages$lineage == match, 3] #and rolling prevalence
+    Prob_mut_given_lin <- mut_by_lin[mut_by_lin$mutation == mutation, 11] #for mutation in given lineage, find % prevalence
+    if(!is.na(match)){
+      print(paste("The lineage", match, "has", round(match_roll_prev,2), "prevalence within two weeks of", date, "and contains mutation", mutation, "with a prevalence of", round(Prob_mut_given_lin, 2)))
+      result[nrow(result) + 1,] <- c(date, mutation, match, Num_lin, match_roll_prev, Prob_mut_given_lin)
+          #add results to result df
+    } else{
+      #print("No match") #print when no matching mutation found
+    }
+  }
+  
+  
+  #Bayes theorem
+  if(nrow(result) == 0){ #when no matches result has zero rows
+    print(paste("No matches for",mutation, "within 2 weeks of", date))
+    lineage_call[nrow(lineage_call) + 1,] <<- c(id, NA, NA, mutation, "no match")
+    #Sys.sleep(1) #sleep time to not exceed API usage limit
+  } 
+  
+  if(nrow(result) > 0){
+    result <- result %>%
+      mutate(Prob_lin_given_mut = result$Prob_mut_given_lin*result$Num_lin/Sum_mutation) #bayes
+    best_lineage <- result %>%
+      slice_max(Prob_lin_given_mut)
+    lineage_call[nrow(lineage_call) + 1,] <<- c(id, best_lineage$match, best_lineage$Prob_lin_given_mut, mutation, NA)
+    write.csv(lineage_call, "lineagecall.csv")
+  }
+}
+  
+```
+
+```{r}
+#mutation function on one set of date/mutation - save output to text
+clear_output()
+mut_function("2020-07-30", "orf1b:p314l", "ID1")
+```
+```{r}
+epicc_data_225 <- epicc_data[-c(1:225),]
+```
+```{r}
+epicc_function <- function(){
+  #clear previous output
+  #clear_output()
+  for(i in 1:nrow(head(epicc_data))) {
+    #go through each row in epicc data
+    row <- head(epicc_data[i,]) 
+    print(paste(i, ": ", row$SampleID)) #show number of iterations and Sample ID
+    for(j in 1:50){
+      aa <- paste0("aa", j) #go through each aa mutation (up to 50)
+      
+      if(!is.na(head(epicc_data[[i, aa]]))){
+              print(epicc_data[[i, aa]]) #print mutation
+              #mut function on each row x mutations
+              mut_function(row$`Collection Date`, epicc_data[[i, aa]], row$SampleID) 
+      }
+    }
+ }
+}
+```
+```{r}
+
+
+#capture output to txt file capture.output(epicc_function, epicc_output.txt))
+epicc_function()
+
+
+```
+
+```{r}
+#plot lineages by location
+cols <- 77
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(cols)
+
+plot <- plotAllLineagesByLocation(location = "United States", other_threshold = 0.02, ndays = 1000) + 
+          scale_fill_manual(values = mycolors)
+
+plot + theme(legend.position="none") 
+plot 
+
+#ggsave(filename = 'plot.png', plot, path = '/Users/vhogan/Documents/EPICC/Outbreak-info', height = 5, width = 10, unit = "in")
+
+```
+```{r}
+epicc_new_lin1 <- read.csv("lineagecall226.csv")
+epicc_new_lin <- read.csv("lineagecall1_225.csv") %>%
+  bind_rows(epicc_new_lin1)
+
+epicc_no_match <- epicc_new_lin %>%
+  filter(notes == "no match") %>%
+  select(SampleID) %>%
+  unique()
+
+epicc_match <- epicc_new_lin %>%
+  filter(!(SampleID %in% epicc_no_match$SampleID))
+
+epicc_lin_plot <- ggplot(head(epicc_match), 
+                         aes(x = SampleID, y = Prob_lin_given_mut, group = interaction(SampleID , lineage))) +
+  geom_col()
+
+epicc_lin_plot
+  
+epicc_pivot_lin <- epicc_match %>%
+  pivot_wider(names_from = mutation, values_from = lineage, id_cols = SampleID) 
+  
+epicc_pivot_lin$all_lin = apply(epicc_pivot_lin[,-1], 1, paste, collapse = " ")
+
+epicc_pivot_prob <- epicc_match %>%
+  pivot_wider(names_from = mutation, values_from = Prob_lin_given_mut, id_cols = SampleID)
+
+```
+
+```{r}
+epicc_og_lineage <- epicc_data_og %>%
+  select(`Subject ID`, SampleID, `%>=20x`, lineage)
+
+new_lineages <- lineage_call %>%
+  mutate(`Subject ID` = paste0("P085-", substr(SampleID, 1, 8))) %>%
+  left_join(epicc_og_lineage, by = "Subject ID")
+```
+```{r}
+#create list of all unique lineages that have occured in us = 250 lineages
+lineage_list <- us_lineages %>%
+  select(lineage) %>%
+  unique() %>%
+  filter(lineage != "other")
+  
+#all observed mutations in us
+char_muts_all <- getMutationsByLineage(pangolin_lineage = lineage_list$lineage)
+```
+```{r}
+mut_prob_function <- function(linA, mutB, mutC){
+  char_muts_A <- char_muts_all %>%
+    filter(lineage == linA)
+  
+  ProbC_A <- char_muts_of_mutation[char_muts_A$mutation == mutC, 2]/char_muts_of_mutation[char_muts_A$mutation == mutC, 3]
+  ProbB_A <- char_muts_of_mutation[char_muts_A$mutation == mutB, 2]/char_muts_of_mutation[char_muts_A$mutation == mutB, 3]
+  Num_lin <- char_muts_of_mutation[char_muts_of_mutation$lineage == match, 3]
+}
+```
+```{r}
+char_muts <- getMutationsByLineage(pangolin_lineage = c("ba.1.1", "ba.2", "ba.3"))
+plotMutationHeatmap(char_muts, gene2Plot = "N", lightBorders = FALSE)
+```
+
+
+
+
+
+
+
+

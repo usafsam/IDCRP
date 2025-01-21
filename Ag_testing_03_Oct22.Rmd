@@ -1,0 +1,272 @@
+---
+title: "RTPCR and Sequencing results after rapid antigen testing"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(readr)
+library(plotly)
+library(viridis)
+library(vtable)
+
+```
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#upload RTPCR data
+data <- read_excel(path = "20220711_Sc2_rapidtests_1_data.xlsx", sheet = "data") %>%
+  filter(SampleID != "Mock_Positive_2")
+
+#add 1 month data from two text files
+data_1mo <- read.csv(file = "20220811-SC2-rapidtest1mo_61_export.csv")
+
+data_1mo_2 <- read.csv(file = "220220811_SC2rapidtest1mo_Dx_data_export.csv") 
+
+#Combine 1 month data files, rename to join with original data
+data_1mo <- data_1mo %>%
+  bind_rows(data_1mo_2) %>%
+  #Split sampleID to two columns with "1mo" in Freeze column and remained as SampleID
+  separate(SampleID, c("Freeze", "SampleID"), "_", extra = "merge") %>%
+  select(-Freeze) %>%
+  rename(N1.1mo = N1, N2.1mo = N2, RP.1mo = Rp, `N1 Quantity 1mo` = N1.Quantity, `N2 Quantity 1mo` = N2.Quantity)
+  
+data <- left_join(data, data_1mo, by = "SampleID")
+```
+### <span style="color: blue;"> RT-PCR Results </span>
+#### <span style="color: gray;"> N1 has a median Ct of 26.5 and increases to 28.2 after the aliquot is frozen for 1 month and then re-extracted. N2 is ~2 Ct higher than N1 on average. Rp values often drop out completely, more so after 1 month freeze. N1 quantities remained similar after freeze. A summary table below the plot shows the mean, median, and standard deviation of each.
+<br>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+plot_pcr <- data %>%
+  plot_ly(y = ~N1, x0 = 'N1') %>%
+  add_trace(type = "box",
+            mode = "markers",
+            boxpoints = "all",
+            jitter = 1,
+            pointpos = 0, 
+            text = ~paste('</br>', SampleID,
+                        '</br>N1: ', N1,
+                        '</br>N1 - 1 mo:', N1.1mo),
+            hoverinfo = 'text',
+            name = "N1 - original") %>%
+  
+  add_trace(y = ~N1.1mo, x0 = 'N1',
+            type = "box",
+            mode = "markers",
+            boxpoints = "all",
+            jitter = 1,
+            pointpos = 0, 
+            text = ~paste('</br>', SampleID,
+                        '</br>N1: ', N1,
+                        '</br>N1 - 1 mo: ', N1.1mo),
+            hoverinfo = 'text',
+            name = "N1 - 1 month freeze") %>%
+  
+  add_trace(y = ~N2, x0 = 'N2',
+            type = "box",
+            mode = "markers",
+            boxpoints = "all",
+            jitter = 1,
+            pointpos = 0, 
+            text = ~paste('</br>', SampleID,
+                        '</br>N2: ', N2,
+                        '</br>N2 - 1 mo: ', N2.1mo),
+            hoverinfo = 'text',
+            name = "N2 - original") %>%
+
+  add_trace(y = ~N2.1mo, x0 = 'N2',
+            type = "box",
+            mode = "markers",
+            boxpoints = "all",
+            jitter = 1,
+            pointpos = 0, 
+            text = ~paste('</br>', SampleID,
+                        '</br>N2: ', N2,
+                        '</br>N2 - 1 mo: ', N2.1mo),
+            hoverinfo = 'text',
+            name = "N2 - 1 month freeze") %>%
+    
+  add_trace(y = ~RP, x0 = 'Rp',
+            type = "box",
+            mode = "markers",
+            boxpoints = "all",
+            jitter = 1,
+            pointpos = 0, 
+            text = ~paste('</br>', SampleID,
+                        '</br>Rp: ', RP,
+                        '</br>Rp - 1 mo: ', RP.1mo),
+            hoverinfo = 'text',
+            name = "Rp - original") %>%
+
+  add_trace(y = ~RP.1mo, x0 = 'Rp',
+            type = "box",
+            mode = "markers",
+            boxpoints = "all",
+            jitter = 1,
+            pointpos = 0, 
+            text = ~paste('</br>', SampleID,
+                        '</br>Rp: ', RP,
+                        '</br>Rp - 1 mo: ', RP.1mo),
+            hoverinfo = 'text',
+            name = "Rp - 1 month freeze") %>%
+  
+  layout(title = 'Ct values before and after 1 month freeze and re-extract',
+         yaxis = list(title = 'Ct'),
+         xaxis = list(title = ""))
+
+  
+plot_pcr
+```
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#statistics table from vtable package, include mean, median stdev, 1 decimal place
+sumtable(data, summ=c('mean(x)', 'median(x)', 'sd(x)'), digits = 1, title = "")
+  
+```
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#upload sequencing data
+
+perf <- read_excel(path = "/Users/vivian/EPICC/Ag_testing/220722_NB2_Midnight_performance.xlsx") %>%
+  rename(SampleID = Sample)
+
+nextclade <- read_excel(path = "/Users/vivian/EPICC/Ag_testing/220722_NB2_Midnight_lineage.xlsx", sheet = "Nextclade") %>%
+  rename(SampleID = seqName)
+
+pangolin <- read_excel(path = "/Users/vivian/EPICC/Ag_testing/220722_NB2_Midnight_lineage.xlsx", sheet = "Pangolin") %>%
+  rename(SampleID = taxon)
+
+seq_data <- left_join(perf, nextclade, by = "SampleID") %>%
+  left_join(pangolin, by = "SampleID") %>%
+  mutate(qc.overallScore = as.numeric(qc.overallScore)) %>%
+  filter(SampleID != "Binax_24h_inVTM_1", SampleID != "Binax_24h_inVTM_2")
+
+data_final <- left_join(data, seq_data, by = "SampleID") %>%
+  mutate(ID = SampleID) %>%
+  separate(ID, c("Test", "Type", "Buffer"), "_")
+```
+
+### <span style="color: blue;"> Sequencing Results </span>
+#### <span style="color: gray;"> Most Ag tests resulted in the expected lineage call, BA.2.3. Six specimens did not get a lineage call and 2 got an incorrect recombinant call (with low genome coverage). The table below shows the 8 specimens that did not receive the BA.2.3 lineage call. Further analysis only explores the specimens that got the expected lineage call.</span>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+plot_lin <- seq_data %>%
+  mutate(Nextclade_pango = ifelse(is.na(Nextclade_pango), "Empty", Nextclade_pango)) %>%
+  count(Nextclade_pango) %>%
+  plot_ly(y = ~n, x = ~Nextclade_pango) %>%
+  add_trace(type = "bar")
+
+plot_lin
+
+disp_seq_data_outliers <- seq_data %>%
+  mutate(Nextclade_pango = ifelse(is.na(Nextclade_pango), "Empty", Nextclade_pango)) %>%
+  filter(Nextclade_pango != "BA.2.3") %>%
+  select(SampleID, AvgCov, `%>=20x`, clade, Nextclade_pango, qc.overallScore)
+
+DT::datatable(disp_seq_data_outliers)
+```
+#### <span style="color: blue;"> QC Overall Score </span>
+#### <span style="color: gray;"> Most specimens got a QC overall score of >100 (bad). Two were "mediocre". The only "good" score was the mock positive specimen.</span>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#plot qc.overallScore, descending
+plot_qc <- data_final %>%
+  filter(Nextclade_pango == "BA.2.3") %>%
+  plot_ly(y = ~qc.overallScore, x = ~SampleID ) %>%
+  add_trace(type = "scatter", 
+            mode = 'markers',
+            color = ~qc.overallStatus, 
+            colors = c("red", "green", "orange")) %>%
+  layout(xaxis = list(categoryorder = "total descending")) #order descending
+
+
+plot_qc
+```
+#### <span style="color: blue;"> Genome Coverage </span>
+#### <span style="color: gray;"> Most specimens got a genome coverage around 90% at 20x.</span>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#plot 20x genome coverage, descending
+plot_genome <- data_final %>%
+  filter(Nextclade_pango == "BA.2.3") %>%
+  plot_ly(y = ~`%>=20x`, x = ~SampleID ) %>%
+  add_trace(type = "scatter", mode = 'markers') %>%
+  layout(xaxis = list(categoryorder = "total ascending"), #order ascending
+         yaxis = list(tickvals = seq(0, 100, 10),
+                      range = list(0,100))) 
+
+
+plot_genome
+```
+#### <span style="color: blue;"> N1 vs Genome Coverage </span>
+#### <span style="color: gray;"> Result follows the expected correlation with N1 and percent genome coverage. Specimens with N1 < 27 get good coverage (~90%). Specimens with N1 >27 have mixed results. Of note, the best coverage other than the mock positive was in a specimen with N1 = 28.</span>
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+plot_n1_genome <- data_final %>%
+  filter(Nextclade_pango == "BA.2.3") %>%
+  plot_ly(y = ~`%>=20x`, x = ~N1) %>%
+  add_trace(type = "scatter", 
+            mode = 'markers',
+            text = ~paste('</br>', SampleID,
+                        '</br>N1: ', N1,
+                        '</br>N2: ', N2,
+                        '</br>Rp: ', RP),
+            hoverinfo = 'text',
+            color = ~qc.overallStatus,
+            colors = c("red", "green", "orange")) %>%
+  
+  layout(xaxis = list(tickvals = seq(0, 40, 5),
+                      range = list(0,40)), 
+         yaxis = list(tickvals = seq(0, 100, 10),
+                      range = list(0,100))) 
+
+
+plot_n1_genome
+```
+#### <span style="color: gray;"> Similar sequencing success is seen with all three buffers. Shield gives the best results after 24h storage of the test at 4C. Note that QV tested swabs were removed from this analysis due to sequencing failure. The QV extract was successfully sequenced. Also one Binax Prime swab was removed and one Binax 24h VTM. This makes the argument that **Binax swabs pulled from cards are similar to QuickVue remaining extract. For buffer choice, Shield is better than Prime or VTM.**</span>
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+plot_n1_genome_buffer <- data_final %>%
+  filter(Nextclade_pango == "BA.2.3") %>%
+  plot_ly(y = ~`%>=20x`, x = ~N1) %>%
+  add_trace(type = "scatter", 
+            mode = 'markers',
+            text = ~paste('</br>', SampleID,
+                        '</br>N1: ', N1,
+                        '</br>N2: ', N2,
+                        '</br>Rp: ', RP),
+            hoverinfo = 'text',
+            color = ~Buffer,
+            colors = c("#00FF00","#00D4FF", "#0011FF", "#CC00FF"),
+            symbol = ~Type) %>%
+  
+  layout(title = "Genome coverage by Buffer and Type of swab",
+         xaxis = list(tickvals = seq(0, 40, 5),
+                      range = list(0,40)),
+         yaxis = list(tickvals = seq(0, 100, 10),
+                      range = list(0,100))) 
+
+
+plot_n1_genome_buffer
+```
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+plot_n1_genome_test <- data_final %>%
+  filter(Nextclade_pango == "BA.2.3") %>%
+  plot_ly(y = ~`%>=20x`, x = ~N1) %>%
+  add_trace(type = "scatter", 
+            mode = 'markers',
+            text = ~paste('</br>', SampleID,
+                        '</br>N1: ', N1,
+                        '</br>N2: ', N2,
+                        '</br>Rp: ', RP),
+            hoverinfo = 'text',
+            color = ~Test,
+            colors = c("#00FF00","#00D4FF", "#0011FF", "#CC00FF"),
+            symbol = ~Type) %>%
+  
+  layout(title = "Genome coverage by Test and Type of swab",
+         xaxis = list(tickvals = seq(0, 40, 5),
+                      range = list(0,40)),
+         yaxis = list(tickvals = seq(0, 100, 10),
+                      range = list(0,100))) 
+
+
+plot_n1_genome_test
+```

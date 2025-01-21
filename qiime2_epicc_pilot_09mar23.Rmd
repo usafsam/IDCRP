@@ -1,0 +1,250 @@
+---
+title: "Qiime2 output EPICC pilot run"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(janitor)
+library(readxl)
+library(readr)
+library(plotly)
+library(viridis)
+knitr::opts_chunk$set(echo = FALSE, warnings = FALSE, message = FALSE)
+```
+### <span style="color: blue;">Demultiplexing Sequences</span>
+##### <span style="color: gray;">qiime tools import <br> --type 'SampleData[PairedEndSequencesWithQuality]' <br> --input-path 230208-manifest.tsv <br> --output-path demux.qza <br> --input-format PairedEndFastqManifestPhred33V2 <br><br> qiime demux summarize <br> --i-data demux.qza <br> --o-visualization demux.qzv</span>
+##### <span style="color: black;">Imports fastq files and outputs demux.qza (qiime2 artifact) containing demultiplexed sequences and demux.qzv (qiime2 visualization file) <br>Visualization file shows read counts and read quality scores. These data were downloaded as tsv files for visualation shown below to compare to Ct values <br> Despite having a low Ct the known positives containing community standard have a low number of reads, similar to the negative samples. EPICC samples cluster at a slightly higher Ct and higher reads with no clear correlation to sample type.</span>
+<br>
+
+```{r}
+pcr <- read_excel("/Users/vhogan/Documents/EPICC/Qiime2/230208_epicc16s_pilot_PCR_data.xlsx", sheet = "data")
+
+metadata <- read_excel("/Users/vhogan/Documents/EPICC/Qiime2/230208_manifest.xlsx", sheet = "metadata") %>%
+  rename(SampleID = `sample-id`)
+
+reads <- read_tsv("/Users/vhogan/Documents/EPICC/Qiime2/per-sample-fastq-counts.tsv", col_types = list(col_character(), col_double(), col_double())) %>%
+  rename(SampleID = `sample ID`)
+
+#upload quality data, transpose, use first row as names from janitor::row_to_names()
+quality_score_f <- read_tsv("/Users/vhogan/Documents/EPICC/Qiime2/forward-seven-number-summaries.tsv", show_col_types = FALSE) %>%
+  t %>% 
+  as.data.frame() %>% 
+  row_to_names(1) %>%
+  mutate(num = c(1:298))
+
+quality_score_r <- read_tsv("/Users/vhogan/Documents/EPICC/Qiime2/reverse-seven-number-summaries.tsv", show_col_types = FALSE) %>%
+  t %>% 
+  as.data.frame() %>% 
+  row_to_names(1) %>%
+  mutate(num = c(1:298))
+
+stats_dada2 <- read_tsv("/Users/vhogan/Documents/EPICC/Qiime2/stats-dada2.tsv", show_col_types = FALSE) %>%
+  filter(!row_number() == 1) %>%
+  rename(SampleID = `sample-id`)
+
+stats_dada2_attempt1 <- read_tsv("/Users/vhogan/Documents/EPICC/Qiime2/stats-dada2-attempt1.tsv", show_col_types = FALSE) %>%
+  filter(!row_number() == 1) %>%
+  rename(SampleID = `sample-id`)
+
+data <- left_join(pcr, metadata, by = "SampleID") %>%
+  left_join(reads, by = "SampleID") %>%
+  left_join(stats_dada2, by = "SampleID")
+
+data_attempt1 <- left_join(pcr, metadata, by = "SampleID") %>%
+  left_join(reads, by = "SampleID") %>%
+  left_join(stats_dada2_attempt1, by = "SampleID") 
+
+```
+##### <span style="color: black;"> Quality scores are used to determine how many bases should be trimmed and truncated from the beginning and end of each sequence in the DADA2 pipeline (next step). This quality filtering is used to remove low quality regions of the sequences. Below the median quality score is shown in orange, the lowest 2% quality score in blue and the highest 98% in green. 
+```{r}
+reads_plot <- data %>%
+  plot_ly(x=~Ct, y =~`forward sequence count`) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = ~Type,
+            colors = viridis_pal(option = "H")(6),
+            text = ~paste('</br>', data$SampleID, '</br>Ct: ', data$Ct, '</br>Reads: ', data$`forward sequence count`), 
+            hoverinfo = 'text') %>%
+
+  layout(title ='Reads vs. CT Values',
+            yaxis = list(title = 'Reads',
+                         tickvals = seq(0, 450000, 50000),
+                         range = list(0, 450000)), 
+            xaxis = list(title='CT Values', 
+                         tickvals = seq(0, 45, 5), 
+                         showlegend = T))
+
+reads_plot
+```
+```{r}
+quality_plot_f <- quality_score_f %>%
+  plot_ly(x=~num, y =~`2%`) %>%
+
+    add_trace(
+              name = '2%',
+              type = 'scatter',
+              mode = 'markers') %>%
+  
+    add_trace(x = ~num, y = ~`50%`,
+              name = '50%',
+              type = 'scatter', 
+              mode = 'markers') %>%
+  
+    add_trace(x = ~num, y = ~`98%`,
+              name = '98%',
+              type = 'scatter',
+              mode = 'markers') %>%
+    
+    layout(title ='Forward Reads Quality Scores',
+            yaxis = list(title = 'Quality Score', 
+                         tickvals = seq(0, 45, 5),
+                         range = list(0, 45)), 
+            xaxis = list(title = 'Sequence Base'))
+
+quality_plot_f
+```
+```{r}
+quality_plot_r <- quality_score_r %>%
+  plot_ly(x=~num, y =~`2%`) %>%
+
+    add_trace(
+              name = '2%',
+              type = 'scatter',
+              mode = 'markers') %>%
+  
+    add_trace(x = ~num, y = ~`50%`,
+              name = '50%',
+              type = 'scatter', 
+              mode = 'markers') %>%
+  
+    add_trace(x = ~num, y = ~`98%`,
+              name = '98%',
+              type = 'scatter',
+              mode = 'markers') %>%
+    
+    layout(title ='Reverse Reads Quality Score',
+            yaxis = list(title = 'Quality Score', 
+                         tickvals = seq(0, 45, 5),
+                         range = list(0, 45)), 
+            xaxis = list(title = 'Sequence Base'))
+
+quality_plot_r
+```
+```{r}
+dada2_plot <- data %>%
+  plot_ly(x=~Ct, y =~filtered) %>%
+            add_trace(
+            name = 'Filtered Reads',
+            type = 'scatter', 
+            mode = 'markers', 
+            text = ~paste('</br>', data$SampleID, 
+                          '</br>Ct: ', data$Ct, 
+                          '</br>Total Reads: ', data$`forward sequence count`,
+                          '</br>Filtered: ', data$filtered,
+                          '</br>Denoised: ', data$`denoised`), 
+            hoverinfo = 'text') %>%
+  
+            add_trace(x = ~Ct, y = ~`non-chimeric`,
+            name = 'Non-Chimeric Reads',
+            type = 'scatter', 
+            mode = 'markers', 
+            text = ~paste('</br>', data$SampleID, 
+                          '</br>Ct: ', data$Ct, 
+                          '</br>Total Reads: ', data$`forward sequence count`,
+                          '</br>Filtered: ', data$filtered,
+                          '</br>Non-Chimeric: ', data$`non-chimeric`), 
+            hoverinfo = 'text') %>%
+  
+            add_trace(x = data_attempt1$Ct, y = data_attempt1$`filtered`,
+            name = 'Filtered Reads -attempt 1',
+            type = 'scatter', 
+            mode = 'markers', 
+            text = ~paste('</br>', data_attempt1$SampleID, 
+                          '</br>Ct: ', data_attempt1$Ct, 
+                          '</br>Total Reads: ', data_attempt1$`forward sequence count`,
+                          '</br>Filtered: ', data_attempt1$filtered,
+                          '</br>Non-Chimeric: ', data_attempt1$`non-chimeric`), 
+            hoverinfo = 'text') %>%
+  
+            add_trace(x = data_attempt1$Ct, y = data_attempt1$`non-chimeric`,
+            name = 'Non-Chimeric Reads -attempt 1',
+            type = 'scatter', 
+            mode = 'markers', 
+            text = ~paste('</br>', data_attempt1$SampleID, 
+                          '</br>Ct: ', data_attempt1$Ct, 
+                          '</br>Total Reads: ', data_attempt1$`forward sequence count`,
+                          '</br>Filtered: ', data_attempt1$filtered,
+                          '</br>Non-Chimeric: ', data_attempt1$`non-chimeric`), 
+            hoverinfo = 'text') %>%
+
+  layout(title ='Reads passing DADA2 Filter vs. CT Values',
+            yaxis = list(title = 'Filtered Reads',
+                         tickvals = seq(0, 450000, 50000),
+                         range = list(0, 450000)), 
+            xaxis = list(title='CT Values', 
+                         tickvals = seq(0, 45, 5), 
+                         showlegend = T))
+
+dada2_plot
+```
+```{r}
+dada2_percent_plot <- data %>%
+  plot_ly(x=~Ct, y =~`percentage of input passed filter`) %>%
+            add_trace(
+            name = 'Passed Filter',
+            type = 'scatter', 
+            mode = 'markers', 
+            text = ~paste('</br>', data$SampleID, 
+                          '</br>Ct: ', data$Ct, 
+                          '</br>Total Reads: ', data$`forward sequence count`,
+                          '</br>% Passed: ', data$`percentage of input passed filter`,
+                          '</br>% Non-Chimeric: ', data$`percentage of input non-chimeric`), 
+            hoverinfo = 'text') %>%
+  
+            add_trace(x=~Ct, y =~`percentage of input non-chimeric`,
+            name = 'Non-Chimeric',
+            type = 'scatter', 
+            mode = 'markers', 
+            text = ~paste('</br>', data$SampleID, 
+                          '</br>Ct: ', data$Ct, 
+                          '</br>Total Reads: ', data$`forward sequence count`,
+                          '</br>% Passed: ', data$`percentage of input passed filter`,
+                          '</br>% Non-Chimeric: ', data$`percentage of input non-chimeric`), 
+            hoverinfo = 'text') %>%
+  
+            add_trace(x=data_attempt1$Ct, y =data_attempt1$`percentage of input passed filter`,
+            name = 'Passed Filter -attempt 1',
+            type = 'scatter', 
+            mode = 'markers', 
+            text = ~paste('</br>', data_attempt1$SampleID, 
+                          '</br>Ct: ', data_attempt1$Ct, 
+                          '</br>Total Reads: ', data_attempt1$`forward sequence count`,
+                          '</br>% Passed: ', data_attempt1$`percentage of input passed filter`,
+                          '</br>% Non-Chimeric: ', data_attempt1$`percentage of input non-chimeric`), 
+            hoverinfo = 'text') %>%
+  
+            add_trace(x=data_attempt1$Ct, y =data_attempt1$`percentage of input non-chimeric`,
+            name = 'Non-Chimeric -attempt 1',
+            type = 'scatter', 
+            mode = 'markers', 
+            text = ~paste('</br>', data_attempt1$SampleID, 
+                          '</br>Ct: ', data_attempt1$Ct, 
+                          '</br>Total Reads: ', data_attempt1$`forward sequence count`,
+                          '</br>% Passed: ', data_attempt1$`percentage of input passed filter`,
+                          '</br>% Non-Chimeric: ', data_attempt1$`percentage of input non-chimeric`), 
+            hoverinfo = 'text') %>%
+
+  layout(title ='Percent passing DADA2 vs. CT Values',
+            yaxis = list(title = 'Filtered Reads',
+                         tickvals = seq(0, 100, 10),
+                         range = list(0, 100)), 
+            xaxis = list(title='CT Values', 
+                         tickvals = seq(0, 45, 5), 
+                         showlegend = T))
+
+dada2_percent_plot
+```
