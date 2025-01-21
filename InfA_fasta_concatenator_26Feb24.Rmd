@@ -1,0 +1,67 @@
+---
+title: "Concatenate InfA consensus fastas"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r, warning=FALSE}
+library(Biostrings)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(stringr)
+```
+```{r}
+fastas <- list.files(path = "/Users/vhogan/Documents/Flu/ARIA_fastas/consensus_fastas/2402xx", pattern = "*.fasta", full.names = TRUE) 
+
+concat_HA <- DNAStringSet()
+concat_NA <- DNAStringSet()
+concat_PA <- DNAStringSet()
+  
+for(i in 1:length(fastas)){
+  
+  sample <- readDNAStringSet(fastas[i])
+  
+  for(j in 1:length(sample)){
+      if (width(sample[j]) == 1701){
+        concat_HA <- c(concat_HA, sample[j])
+      }
+      if (width(sample[j]) < 1415 & width(sample[j]) > 1405){
+        concat_NA <- c(concat_NA, sample[j])
+      } 
+        if (width(sample[j]) == 2151){
+        concat_PA <- c(concat_PA, sample[j])
+        }
+  }
+}
+
+
+```
+```{r}
+for(i in 1:length(fastas)){
+  
+  sample <- readDNAStringSet(fastas[i])
+  
+  #check for samples with failed segments
+  if (length(sample) != 8){
+    print('fewer than 8 segments detected')
+    print(sample) 
+  }
+}
+```
+```{r}
+writeXStringSet(concat_HA, "concat_HA.fa")
+writeXStringSet(concat_NA, "concat_NA.fa")
+writeXStringSet(concat_PA, "concat_PA.fa")
+```
+```{r}
+test <- readDNAStringSet(fastas[7])
+```
+
+
+
+
+
+
+

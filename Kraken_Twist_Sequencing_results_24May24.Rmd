@@ -1,0 +1,473 @@
+---
+title: "Twist sequencing results"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readxl)
+library(plotly)
+library(viridis)
+library(DT)
+library(reshape2)
+library(cowplot)
+library(lubridate)
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+```
+# Twist Run 240418  
+##### Includes coinfections MIX23 - MIX44 with depletion methods "NEPdeb" and "none". "Scrubbed" data is from fastq files that were put through the NCBI scrubber prior to Kraken. "Unscrubbed" data is from fastq files that were put directly through Kraken.
+
+```{r}
+#load data
+
+kraken_output_unscrubbed <- read.csv('/Users/vhogan/Documents/Kraken2/240418/240418_twist_kraken_results_unscrubbed.csv') %>%
+  separate(SampleID, into = c("SampleID", "Depletion"), sep = "_") %>%
+  select(-X) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(scrubbed = "unscrubbed")
+
+kraken_output_scrubbed <- read.csv('/Users/vhogan/Documents/Kraken2/240418/240418_twist_kraken_results_scrubbed.csv') %>%
+  separate(SampleID, into = c("SampleID", "Depletion"), sep = "_") %>%
+  select(-X) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(scrubbed = "scrubbed")
+
+kraken_output <- kraken_output_unscrubbed %>%
+  rbind(kraken_output_scrubbed) %>%
+  mutate(Depletion = case_when(Depletion == "" ~ "None",
+                             is.na(Depletion) ~ "None",
+                             TRUE ~ Depletion))
+
+luminex_result <- read_xlsx('/Users/vhogan/Documents/Kraken2/240418/Mix23-44_luminex.xlsx') %>%
+  rename(SampleID = ID)
+
+rtpcr <- read_xlsx('/Users/vhogan/Documents/Kraken2/240418/20240416_Mix23-44.xlsx', sheet = "data")
+
+#filter only viral outputs of interest from kraken results
+kraken_output_viral <- kraken_output %>%
+  filter(grepl("virus", Name)) %>%
+  filter(!grepl("Simian", Name)) %>%
+  filter(!grepl("Cox", Name)) %>%
+  filter(!grepl("WU", Name))
+
+#combine kraken output with rtpcr and luminex results
+data_joined <- kraken_output_viral %>% 
+  left_join(luminex_result, by = "SampleID") %>%
+  left_join(rtpcr, by = "SampleID") %>%
+  complete(SampleID, Depletion, scrubbed)
+
+
+#filter only human reads from kraken output
+human_reads <- kraken_output %>%
+  filter(NCBI_ID == 9606)
+
+#explicitly state 0 percent and 0 Reads for specimens with 0 human reads
+human_reads_complete <- human_reads %>%
+  complete(SampleID, Depletion, scrubbed) %>%
+  mutate(Num_fragments_assigned = case_when(is.na(Num_fragments_assigned) ~ 0,
+                                            TRUE ~ Num_fragments_assigned)) %>%
+  mutate(Percent = case_when(is.na(Percent) ~ 0,
+                             TRUE ~ Percent))
+
+
+#filter RSV positive results from luminex result, rtpcr result, or kraken result
+RSV_pos <- data_joined %>%
+  filter(`RSV A` == "Positive" | `RSV B` == "Positive" | rsv > 0 | grepl("ortho", Name)) %>%
+  select(SampleID, `RSV B`, rsv) %>%
+  unique()
+
+#filter Adeno positive results from luminex result, rtpcr result, or kraken result
+Adeno_pos <- data_joined %>%
+  filter(adeno > 0 | Adeno == "Positive" |grepl("adeno", Name)) %>%
+  select(SampleID, Adeno, adeno) %>%
+  unique()
+
+#filter rhino/enter positive from luminex result, rtpcr result, or kraken result
+RHE_pos <- data_joined %>%
+  filter(`Rhino/Ent` == "Positive" | rhino > 0 | entero > 0| grepl("rhino", Name) | grepl("entero", Name)) %>%
+  select(SampleID, rhino, entero, `Rhino/Ent`) %>%
+  unique()
+
+```
+### Human Reads
+##### Even after scrubbing, many specimens still contain human reads. When no depletion is used, nearly all specimens still show some human reads while only around half of the specimens have human reads after NEBdep. The highest number of human reads with no depletion comes from the positive control, however it is still only 3% of the reads. The highest numbers from NEBdep come from MIX 33 and MIX 36.  
+
+##### The percentage of human reads does not see a significant average difference based on depletion method (for specimens containing human reads)
+
+##### The table below shows the number and percent of human reads for each specimen/depletion method
+```{r}
+#Use melt function to create row for each sample with Ct
+depletion_melt <- melt(human_reads_complete, id.vars=c('SampleID', 'Depletion', 'scrubbed'),
+                  measure.vars=c('Num_fragments_assigned')) 
+
+depletion_melt <- depletion_melt %>%
+                  unite(dep_scrub, Depletion, scrubbed)
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+depletion_plot <- depletion_melt %>%
+    ggplot(aes(x = dep_scrub, y = value, fill = dep_scrub)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Depletion Comparison -  Number of Reads",
+          y = "Reads",
+          x = "Depletion") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("slateblue", "orangered", "springgreen3", "violetred")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+depletion_plot
+```
+```{r}
+#Use melt function to create row for each sample with Ct
+depletion_melt <- melt(human_reads_complete, id.vars=c('SampleID', 'Depletion', 'scrubbed'),
+                  measure.vars=c('Percent'))
+
+depletion_melt <- depletion_melt %>%
+                  unite(dep_scrub, Depletion, scrubbed)
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+depletion_plot_percent <- depletion_melt %>%
+    ggplot(aes(x = dep_scrub, y = value, fill = dep_scrub)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "Depletion Comparison - Percentage of Reads",
+          y = "Percent",
+          x = "Depletion") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("slateblue", "orangered", "springgreen3", "violetred")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+depletion_plot_percent
+```
+```{r}
+datatable(human_reads_complete)
+```
+# Ct comparison to Luminex RPP Result
+
+##### Nearly all RPP positive rhino/entero specimens were positive on the rhinovirus specific PCR assay. MIX 23 was not tested on the rhinovirus assay due to lack of volume. Only 3 specimens were positive on the enterovirus assay. MIX29 was positive on RPP but negative on both the rhino and entero specific pcr assays indicating a likley false positive on Luminex
+
+```{r}
+entero_ct_violin <- RHE_pos %>%
+  plot_ly(y=~entero, x = ~`Rhino/Ent`) %>%
+    add_trace(
+          name = 'Entero',
+          type = 'violin' , 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          #color = joined_data$`BLAST result`,
+          #colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', RHE_pos$`SampleID`,
+                        '</br>Rhino Ct: ', RHE_pos$rhino,
+                        '</br>Entero Ct: ', RHE_pos$entero),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+    add_trace(y=~rhino, x = ~`Rhino/Ent`,
+          name = 'Rhino',
+          type = 'violin' , 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          #color = joined_data$`BLAST result`,
+          #colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', RHE_pos$`SampleID`, 
+                        '</br>Rhino Ct: ', RHE_pos$rhino,
+                        '</br>Entero Ct: ', RHE_pos$entero),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='Rhino/Entero Ct Values by Luminex result',
+         yaxis = list(title = 'Ct', range = c(0,40)),
+         xaxis = list(title = "Luminex Rhino/Entero result"))
+
+entero_ct_violin
+```
+```{r}
+#Use melt function to create row for each sample with Ct
+rhe_ct_melt <- melt(data_joined, id.vars='SampleID', 
+                  measure.vars=c('entero', 'rhino')) %>%
+  unique() %>%
+  filter(!is.na(value)) #remove specimens not tested: MIX36 on both, MIX23 on rhino
+
+#Using variable (test type) and value (Rp Ct) to create connected box plot with lines between subject ID
+rhe_ct_plot <- rhe_ct_melt %>%
+    ggplot(aes(x = variable, y = value, fill = variable)) + 
+    geom_boxplot(alpha = 0.1) +
+    geom_line(aes(group = SampleID), linewidth=.6, position = position_dodge(0.5), color = "gray") + #line between same SampleID
+    geom_point(aes(group = SampleID), size=2, shape=21, position = position_dodge(0.5)) + #point for each sample
+    labs(#can also add title, subtitle and/or caption
+          title = "RHE Ct Comparison",
+          y = "Ct",
+          x = "Assay") +
+    theme_cowplot() +
+    scale_fill_manual(values = c("slateblue", "orangered", "springgreen3", "violetred")) +
+    theme(legend.position = "none") #+ #remove legend
+    #ylim(20,37.418) #set limits of y axis
+
+rhe_ct_plot
+```
+##### Kraken did not identify rhino/entero virus in MIX29, but did find adenovirus (regardless of depletion method). 
+```{r}
+RHE_neg_ct <- data_joined %>%
+  filter(rhino == 0 & entero == 0 & `Rhino/Ent` == "Positive")
+
+datatable(RHE_neg_ct)
+```
+#####Similarly, results mostly concurred between the Luminex RPP and adenovirus specific PCR assay. MIX31 was positive on Luminex but negative on PCR. Some specimens had very high Cts (this has been previously noted with the use of this assay).
+
+
+```{r}
+#Mix23 not tested on PCR
+adeno_ct_violin <- Adeno_pos %>%
+  plot_ly(y=~adeno, x = ~Adeno) %>%
+    add_trace(
+          type = 'violin' , 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          #color = joined_data$`BLAST result`,
+          #colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', Adeno_pos$`SampleID`, 
+                        '</br>Adeno Ct: ', Adeno_pos$adeno),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='Adeno Ct Values by Luminex result',
+         yaxis = list(title = 'Ct', range = c(0,50)),
+         xaxis = list(title = "Luminex Adeno result"))
+
+adeno_ct_violin
+```
+##### Kraken did not identify adenovirus reads in MIX31, but did find enterovirus (regardless of depletion method)
+```{r}
+adeno_neg_ct <- data_joined %>%
+  filter(adeno == 0 & Adeno == "Positive")
+
+datatable(adeno_neg_ct)
+```
+##### Specimens with RSV identified in Luminex all had positive PCR identification except MIX36 was not tested due to lack of volume
+```{r}
+#Mix36 not tested on PCR
+
+rsv_ct_violin <- RSV_pos %>%
+  plot_ly(y=~rsv, x = ~`RSV B`) %>%
+    add_trace(
+          type = 'violin' , 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          #color = joined_data$`BLAST result`,
+          #colors = viridis_pal(option = "H")(5),
+          text = ~paste('</br>', RSV_pos$`SampleID`, 
+                        '</br>RSV B Ct: ', RSV_pos$rsv),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='RSV Ct Values by Luminex result',
+         yaxis = list(title = 'Ct', range = c(0,50)),
+         xaxis = list(title = "Luminex RSV B result"))
+
+rsv_ct_violin
+```
+### Kraken Viral Identification
+
+##### 5 of the 22 specimens had no virus identified via Kraken with any depletion method (shown in table below). MIX23 had low volume and was only tested on entero for rtpcr. Other Luminex results were all confirmed by rtpcr, although some had very high CTs.
+```{r}
+no_viral_id <- data_joined %>%
+  filter(is.na(Name)) %>%
+  filter(!grepl('AD', SampleID)) %>% # remove pos controls
+  filter(!grepl('NTC', SampleID)) %>% # remove NTC
+  select(SampleID) %>%
+  unique() %>%
+  left_join(luminex_result) %>%
+  left_join(rtpcr)
+
+datatable(no_viral_id)
+
+```
+##### 6 more specimens had rhino/entero virus identified via Luminex but did not have rhino/entero identified via Kraken, however the other virus in the coinfection was identified in Kraken.  Other than MIX29, all were also confirmed rhino/entero positive by rtpcr. Not that the table shows each specimen 4 times for each method of depletion/data analysis.
+```{r}
+#list specimens positive for rhe in luminex
+RHE_pos_rpp <- data_joined %>%
+  filter(`Rhino/Ent` == "Positive")
+
+
+
+#list specimens positive for rhe in kraken
+RHE_pos_kraken <- data_joined %>%
+  filter(grepl("rhino", Name) | grepl("entero", Name)) 
+
+
+#make "not in" operator
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+#specimens positive in rpp but neg in kraken for rhe
+RHE_missed_kraken <- RHE_pos_rpp %>%
+  filter(SampleID %!in% RHE_pos_kraken$SampleID) %>%
+  filter(SampleID %!in% no_viral_id$SampleID) #avoid duplicates from above table
+
+
+datatable(RHE_missed_kraken)
+```
+##### No clear trend is seen between Rhino Ct and the percentage of reads attributed to rhino/enterovirus in Kraken. Note that MIX27 is shown twice in this plot because Kraken identified both Rhino A1 and Rhino B3 reads for this specimen.
+```{r}
+no_viral_id <- no_viral_id %>%
+  mutate(Percent = 0) %>%
+  mutate(Name = "No RHE identified")
+
+RHE_missed_kraken <- RHE_missed_kraken %>%
+  mutate(Percent = 0) %>%
+  mutate(Name = "No RHE identified")
+
+RHE_percent_with_zero <- RHE_pos_kraken %>%
+  rbind(no_viral_id) %>%
+  rbind(RHE_missed_kraken)
+
+rhe_percent_plot <- RHE_percent_with_zero %>%
+  plot_ly(x=~rhino, y =~Percent) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = RHE_percent_with_zero$Name,
+            text = ~paste('</br>', RHE_percent_with_zero$SampleID, 
+                          '</br>Rhino Ct: ', RHE_percent_with_zero$rhino,
+                          '</br>Entero Ct: ', RHE_percent_with_zero$entero,
+                          '</br>Kraken: ', RHE_percent_with_zero$Name),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Rhino/Entero Percent reads vs Ct',
+            yaxis = list(title = 'Percent Reads', tickvals = seq(0, 20, 5), range = c(0,20)), 
+            xaxis = list(title='Ct', tickvals = seq(0, 45, 5), range = c(0,45), showlegend = T),
+         autosize = F, width = 700, height = 500)
+
+rhe_percent_plot
+
+```
+```{r}
+#shows that no depletion results sucked
+
+#list specimens positive for rhe in kraken
+RHE_pos_kraken_nodep <- data_joined %>%
+  filter(`Rhino/Ent` == "Positive") %>%
+  filter(Depletion == "" | is.na(Depletion)) %>%
+  filter(grepl("rhino", Name) | grepl("entero", Name)) 
+
+
+#make "not in" operator
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+#specimens positive in rpp but neg in kraken for rhe
+RHE_missed_kraken_nodep <- RHE_pos_rpp %>%
+  filter(SampleID %!in% RHE_pos_kraken_nodep$SampleID) %>%
+  filter(Depletion == "" | is.na(Depletion))
+```
+```{r}
+#list specimens positive for adenovirus in luminex
+adeno_pos_rpp <- data_joined %>%
+  filter(Adeno == "Positive")
+
+#list specimens positive for rhe in kraken
+adeno_pos_kraken <- data_joined %>%
+  filter(Adeno == "Positive") %>%
+  filter(Depletion == "") %>%
+  filter(grepl("adeno", Name)) 
+
+
+#make "not in" operator
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+#specimens positive in rpp but neg in kraken for rhe
+adeno_missed_kraken <- adeno_pos_rpp %>%
+  filter(SampleID %!in% adeno_pos_kraken$SampleID) 
+
+
+datatable(adeno_missed_kraken)
+```
+##### Not enough specimens were positively identified for adenovirus through Kraken to show a true correlation. Grouping on the plot seem to be more related to adenovirus type than Ct. Mix28 and Mix36 are both plotted twice because 2 adenovirus types were identified in Kraken. No depletion was better at identifying adenovirus than NEBdep
+```{r}
+no_viral_id <- no_viral_id %>%
+  mutate(Name = "No adeno identified")
+
+adeno_missed_kraken <- adeno_missed_kraken %>%
+  mutate(Percent = 0) %>%
+  mutate(Name = "No adeno identified")  %>%
+  filter(Depletion == "NEBdep")
+
+adeno_percent_with_zero <- adeno_pos_kraken %>%
+  rbind(no_viral_id) %>%
+  rbind(adeno_missed_kraken)
+
+adeno_percent_plot <- adeno_percent_with_zero %>%
+  plot_ly(x=~adeno, y =~Percent) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = adeno_percent_with_zero$Name,
+            text = ~paste('</br>', adeno_percent_with_zero$SampleID, 
+                          '</br>Adeno Ct: ', adeno_percent_with_zero$adeno,
+                          '</br>Kraken: ', adeno_percent_with_zero$Name),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Adeno Percent reads vs Ct',
+            yaxis = list(title = 'Percent Reads', tickvals = seq(0, 30, 5), range = c(0,30)), 
+            xaxis = list(title='Ct', tickvals = seq(0, 45, 5), range = c(0,45), showlegend = T),
+         autosize = F, width = 700, height = 500)
+
+adeno_percent_plot
+
+```
+##### All 4 specimens positive for RSV B on luminex had RSV identified in Kraken (NEBdep), one was missed with no depletion. MIX36 is not showb because no Ct was obtained due to lack of volume but human orthopneumovirus was 78% of reads according to Kraken
+```{r}
+#list specimens positive for adenovirus in luminex
+rsv_pos_rpp <- data_joined %>%
+  filter(`RSV B` == "Positive")
+
+#list specimens positive for rhe in kraken
+rsv_pos_kraken <- data_joined %>%
+  filter(`RSV B` == "Positive") %>%
+  filter(Depletion == "NEBdep") %>%
+  filter(grepl("ortho", Name)) 
+
+
+#make "not in" operator
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+#specimens positive in rpp but neg in kraken for rhe
+rsv_missed_kraken <- rsv_pos_rpp %>%
+  filter(SampleID %!in% rsv_pos_kraken$SampleID) 
+
+
+#datatable(rsv_missed_kraken)
+```
+```{r}
+rsv_percent_plot <- rsv_pos_kraken %>%
+  plot_ly(x=~rsv, y =~Percent) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = rsv_pos_kraken$Name,
+            text = ~paste('</br>', rsv_pos_kraken$SampleID, 
+                          '</br>RSV Ct: ', rsv_pos_kraken$rsv,
+                          '</br>Kraken: ', rsv_pos_kraken$Name),
+            hoverinfo = 'text') %>%
+
+  layout(title ='RSV Percent reads vs Ct',
+            yaxis = list(title = 'Percent Reads', tickvals = seq(0, 100, 5), range = c(0,100)), 
+            xaxis = list(title='Ct', tickvals = seq(0, 45, 5), range = c(0,45), showlegend = T),
+         autosize = F, width = 700, height = 500)
+
+rsv_percent_plot
+```
+

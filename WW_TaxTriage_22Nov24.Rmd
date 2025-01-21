@@ -1,0 +1,138 @@
+---
+title: "TaxTriage Pathogen Results"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(readxl)
+library(readr)
+library(plotly)
+library(DT)
+library(stringr)
+
+```
+### <span style="color: blue;">Output from TaxTriage(ran on 10/8) on 240821_USNA_WW Sequencing Run</span>
+<br>
+```{r, TaxTriage, warning = FALSE}
+#list file path for each run's taxtriage output report txt file. The only files in the indicated folder should be tax triage output reports from runs to analyze
+runs <- list.files(path = "/Users/vhogan/Documents/WW/TaxTriage_output/runs", full.names=TRUE)
+
+#empty data frame
+taxtriage_txt_all <- data.frame()
+
+#read each txt file and bind rows to combine
+for (path_i in runs){
+  taxtriage_txt_i <- read.delim(path_i) %>%
+    mutate(run = path_i) %>% #fill column with run name
+    mutate(run = str_replace(run, "/Users/vhogan/Documents/WW/TaxTriage_output/runs/taxtriage_output_", "")) %>% #remove extra part of file path
+    mutate(run = str_replace(run, '_report_all.organisms.report.txt', ""))
+  
+  taxtriage_txt_all <- taxtriage_txt_all %>%
+    bind_rows(taxtriage_txt_i)
+}
+
+#select columns of interest, separate sampleID into location and date, calculate percent of reads for each hit'
+#SampleID must be in format e.g. USNA_WW_24MAY30_Tw (1st part is location, 3rd part is date, 2nd and 4th are removed)
+taxtriage_all_clean <- taxtriage_txt_all %>%
+  select(`Detected.Organism`, `Specimen.ID`, `X..Reads.Aligned`, run) %>%
+  rename(detected = `Detected.Organism`,
+         Num = `X..Reads.Aligned`) %>%
+  separate(`Specimen.ID`, into = c('location', NA, 'date', NA)) %>%
+  mutate(date = ifelse(date == 'Tw', NA, date)) %>% #make date NA for controls
+  separate(run, into = c('run_date'), remove = FALSE) %>%
+  unite(SampleID, c(run_date, location, date), remove = FALSE) %>% #make sample ID run_location_date
+  group_by(SampleID) %>% 
+  mutate(all_reads = sum(Num)) %>%
+  mutate(percent_reads = Num/all_reads*100)
+
+#empty row for each ID
+taxtriage_id_col <- taxtriage_all_clean %>% 
+  select(SampleID) %>%
+  unique() %>%
+  mutate(detected = 'None') %>%
+  mutate(Num = 0,
+         all_reads = 0,
+         percent_reads = 0)
+
+
+
+```
+
+#### <span style="color: blue;">Percent abundance of pathogens of interest in each sample. </span>
+<br>
+
+```{r, sample-chart-pathogen, warning=FALSE}
+#Individual plots in loop - need to use html tools to visualize in output
+Pathogen <- htmltools::tagList()
+pathogen_plot <- function(pathogen_name, pathogen_name2, not_name, name){
+  Pathogen[[pathogen_name]] <<- taxtriage_all_clean %>%
+  filter((grepl(pathogen_name, detected, ignore.case = TRUE) | grepl(pathogen_name2, detected, ignore.case = TRUE)) & !grepl(not_name, detected, ignore.case = TRUE)) %>%
+  bind_rows(taxtriage_id_col) %>%
+  plot_ly(x = ~SampleID, y = ~percent_reads, color = ~detected) %>%
+  add_bars() %>%
+  layout(barmode = "stack",
+         title = name,
+         yaxis = list(title = "Percent of Reads"),
+         showlegend = TRUE)
+}
+
+
+for (i in 1:nrow(pathogens)){
+  name <- as.character(pathogens[i,1])
+  
+  search_string1 <- as.character(pathogens[i,2])
+  
+  search_string2 <- as.character(pathogens[i,3])
+  
+  not_string <- as.character(pathogens[i,4])
+  
+  pathogen_plot(search_string1, search_string2, not_string, name)
+}
+
+Pathogen
+```
+
+#### <span style="color: blue;">Number of Reads of pathogens of interest in each sample. </span>
+<br>
+
+```{r, sample-chart-pathogen-num, warning=FALSE}
+pathogens <- read_excel('/Users/vhogan/Documents/WW/pathogens_of_interest.xlsx')
+
+
+#Individual plots in loop - need to use html tools to visualize in output
+Pathogen <- htmltools::tagList()
+pathogen_plot <- function(pathogen_name, pathogen_name2, not_name, name){
+  Pathogen[[pathogen_name]] <<- taxtriage_all_clean %>%
+  filter((grepl(pathogen_name, detected, ignore.case = TRUE) | grepl(pathogen_name2, detected, ignore.case = TRUE)) & !grepl(not_name, detected, ignore.case = TRUE)) %>%
+  bind_rows(taxtriage_id_col) %>%
+  plot_ly(x = ~SampleID, y = ~Num, color = ~detected) %>%
+  add_bars() %>%
+  layout(barmode = "stack",
+         title = name,
+         yaxis = list(title = "Number of Reads"),
+         showlegend = TRUE)
+}
+
+
+for (i in 1:nrow(pathogens)){
+  name <- as.character(pathogens[i,1])
+  
+  search_string1 <- as.character(pathogens[i,2])
+  
+  search_string2 <- as.character(pathogens[i,3])
+  
+  not_string <- as.character(pathogens[i,4])
+  
+  pathogen_plot(search_string1, search_string2, not_string, name)
+}
+
+Pathogen
+```
+
+
+

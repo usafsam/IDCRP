@@ -1,0 +1,59 @@
+---
+title: "Kraken2 output"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(readxl)
+library(readr)
+
+```
+```{r}
+#Upload all txt files to single data frame, clean to show most prevalent sequences identified
+
+colNames <- c('Percent', 'Num_fragments_covered', 'Num_fragments_assigned', 'Rank', 'NCBI_ID', 'Name') #define col names for output df
+
+all_txt_files <-list.files('/Users/vhogan/Documents/Kraken2/240418/20240418_kraken_reports/', pattern = "*report.txt", full.names = T) %>% #list all txt files in folder (report files)
+  setNames(nm = .) %>%                                                                                         #add file location as column
+  map_dfr(~read_delim(.x, 
+                      delim = "\t",                                                                   #make dataframe from reading files
+                      show_col_types = FALSE,
+                      col_names = colNames), .id = "SampleID") %>%
+  mutate(Percent = as.numeric(Percent)) %>%
+  mutate(SampleID = str_remove(SampleID, "_report.txt$")) %>%
+  mutate(SampleID = str_remove(SampleID, ".txt")) %>%   
+  mutate(SampleID = str_remove(SampleID, "Tw")) %>% 
+  mutate(SampleID = str_remove(SampleID, "/Users/vhogan/Documents/Kraken2/240418/20240418_kraken_reports/"))      #remove file path from sample IDs
+                    
+
+data_cleaned <- all_txt_files %>%
+  filter(Num_fragments_covered == Num_fragments_assigned) %>% #include only most specific level classification, not higher level
+  filter(Percent > 1 | Rank == "U") %>% #Remove noise (less than 0.5 percent of reads) but keep unclassified
+  #filter(NCBI_ID != 9606) %>%
+  filter(NCBI_ID != 12022) #%>% #Remove MS2
+  #filter(NCBI_ID != 29394) #Remove D. pigrum
+
+
+data_classified<- data_cleaned %>% #remove unclassified
+  filter(Rank != "U")
+```
+```{r}
+#upload RPP results and compare to sequencing
+
+#upload RPP data
+##RPP_data <- read_excel('/Users/vhogan/Documents/ARIA/Twist_rpp_pilot/ARIA_Antigen_RPP_pilot_sequencing_selection_27Jun23.xlsx', sheet = "Samples_sequencing")
+
+#add RPP data to twist seq df
+#data_joined <- left_join(data_cleaned, RPP_data, by = join_by(SampleID))
+
+```
+```{r}
+#write CSVs
+write.csv(data_cleaned, '/Users/vhogan/Documents/Kraken2/240418_twist_kraken_results_unscrubbed.csv')
+
+```

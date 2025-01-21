@@ -1,0 +1,364 @@
+---
+title: "Ref Seq Align and Feature Table"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+library(Biostrings)
+library(pwalign)
+library(plyr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+
+#Read Me#
+##Update ref_pathogen (line 34) and seq_fasta(line 37) before running
+##version 30Apr24: only run one sequence at a time
+##update 14Jun24: pwalign package added - update to Biostrings calls this for alignment
+##Trim sequences before running script. Remove all Ns and ambiguous bases on both ends
+#QC ChecK:
+#Check gap_ref and gap_sam, gaps should mostly be in the beginning or end or sequence. Limited number throughout-check df to confirm alignment, large number of gaps indicate possible poor alignment/incorrect reference used
+#check_start and check_stop should only have start and stop codons, respectively, for each feature in table
+#stops dataframe should have 0 obs. Any stops here are internal to proteins in feature table - 10Jul24 manual fix for HKU1 sequences: export aligned fasta and replace - (gaps) with N then rerun script
+```
+```{r, upload}
+#Use https://www.ncbi.nlm.nih.gov/refseq/ to find ref sequence. Save fasta and feature table in ref_files folder:
+#To export from NCBI: Send to -> complete record -> file -> fasta & feature table
+
+#Choose pathogen of interest(e.g. NL63, OC43, HKU1, 229E, PIV2, HMPV, Rhino-A10, Rhino-A54, Rhino-A77, Rhino-C42)
+ref_pathogen = "HKU1"
+
+#Upload fasta file of sample
+seq_fasta <- readDNAStringSet("C:/Users/vhogan/Documents/Features/fastas/hcov/A10-08297-6-PCR_TW_S33.consensus-ivar-trimmed.fa")
+name = names(seq_fasta)
+
+#List file locations from reference fastas
+ref_fasta_loc = case_when(ref_pathogen == "NL63" ~ "C:/Users/vhogan/Documents/Features/ref_files/NL63_ref.fasta",
+                          ref_pathogen == "OC43" ~ "C:/Users/vhogan/Documents/Features/ref_files/OC43_ref.fasta",
+                          ref_pathogen == "HKU1" ~ "C:/Users/vhogan/Documents/Features/ref_files/HKU1_refKF.fasta",
+                          ref_pathogen == "229E" ~ "C:/Users/vhogan/Documents/Features/ref_files/229E_ref.fasta",
+                          ref_pathogen == "PIV2" ~ "C:/Users/vhogan/Documents/Features/ref_files/PIV2_ref.fasta",
+                          ref_pathogen == "HMPV" ~ "C:/Users/vhogan/Documents/Features/ref_files/HMPV_ref.fasta",
+                          ref_pathogen == "Rhino-A10" ~ "C:/Users/vhogan/Documents/Features/ref_files/Rhino_A10_ref.fasta",
+                          ref_pathogen == "Rhino-A54" ~ "C:/Users/vhogan/Documents/Features/ref_files/Rhino_A54_ref.fasta",
+                          ref_pathogen == "Rhino-A77" ~ "C:/Users/vhogan/Documents/Features/ref_files/Rhino_A77_ref.fasta",
+                          ref_pathogen == "Rhino-C42" ~ "C:/Users/vhogan/Documents/Features/ref_files/Rhino_C42_ref.fasta")
+
+#List file locations from reference feature tables
+ref_features_loc = case_when(ref_pathogen == "NL63" ~ "C:/Users/vhogan/Documents/Features/ref_files/NL63_ref.txt",
+                             ref_pathogen == "OC43" ~ "C:/Users/vhogan/Documents/Features/ref_files/OC43_ref.txt",
+                             ref_pathogen == "HKU1" ~ "C:/Users/vhogan/Documents/Features/ref_files/HKU1_refKF.txt",
+                             ref_pathogen == "229E" ~ "C:/Users/vhogan/Documents/Features/ref_files/229E_ref.txt",
+                             ref_pathogen == "PIV2" ~ "C:/Users/vhogan/Documents/Features/ref_files/PIV2_ref.txt",
+                             ref_pathogen == "HMPV" ~ "C:/Users/vhogan/Documents/Features/ref_files/HMPV_ref.txt",
+                             ref_pathogen == "Rhino-A10" ~ "C:/Users/vhogan/Documents/Features/ref_files/Rhino_A10_ref.txt",
+                             ref_pathogen == "Rhino-A54" ~ "C:/Users/vhogan/Documents/Features/ref_files/Rhino_A54_ref.txt",
+                             ref_pathogen == "Rhino-A77" ~ "C:/Users/vhogan/Documents/Features/ref_files/Rhino_A77_ref.txt",
+                             ref_pathogen == "Rhino-C42" ~ "C:/Users/vhogan/Documents/Features/ref_files/Rhino_C42_ref.txt")
+
+#read in ref fasta as DNAStringSet
+ref_fasta = readDNAStringSet(ref_fasta_loc)
+
+#read in feature table as df, remove additional qualifier names, check resulting df only has qualifiers of interest
+#Expect "Warning: header and 'col.names' are of different lengths"
+ref_features = read.delim(ref_features_loc, col.names = c('start', 'stop', 'feature_name', 'qualifier_name', 'qualifier_value' )) %>%
+  filter(qualifier_name != 'protein_id',
+         qualifier_name != 'evidence',
+         qualifier_name != 'locus_tag',
+         qualifier_name != 'db_xref') 
+```
+```{r, align}
+n = max(width(ref_fasta), width(seq_fasta)) #number of nuc acid in the larger of ref or sample sequence
+names = c("name", as.character(1:n)) #names for columns of data frame
+
+df <- data.frame(matrix(NA,    # Create empty data frame
+                        nrow = 0,
+                        ncol = n+1)) 
+
+
+
+#function to align and add sequence to df with ref. Input sample fasta and ref_fasta
+fasta_to_df <- function(fasta, ref){
+  alignment <- pairwiseAlignment(ref, fasta)
+  aligned_seq <<- alignedSubject(alignment) #DNAStringSet with aligned sequence
+  seq_char <<- as.character(aligned_seq) #convert translated sequence to character
+  seq_commas <- vapply(strsplit(seq_char, ""), function(x) paste(x, collapse=","), character(1L)) #add commas between aa
+  seq_sep <- unlist(strsplit(seq_commas, ",")) #unlist to add to df
+  seq_name = names(fasta) #name of sequence
+  
+  aligned_ref <<- alignedPattern(alignment) #DNAStringSet with aligned reference
+  ref_char <<- as.character(aligned_ref) #convert translated sequence to character
+  ref_commas <- vapply(strsplit(ref_char, ""), function(x) paste(x, collapse=","), character(1L)) #add commas between aa
+  ref_sep <- unlist(strsplit(ref_commas, ",")) #unlist to add to df
+  ref_name = names(ref) #name of sequence
+  
+  df <<- df %>%
+    rbind(c(ref_name, ref_sep)) %>%
+    rbind(c(seq_name, seq_sep))
+}
+
+fasta_to_df(seq_fasta, ref_fasta)
+colnames(df) <- names #add column names to df
+
+```
+```{r, gaps}
+#function to run through columns of df to check for gap characters, outputs location of gaps into df gap_ref and gap_sam
+
+find_gaps <- function(row){
+  gap <- data.frame(matrix(NA,    # Create empty data frame
+                        nrow = 0,
+                        ncol = 1)) 
+  for(i in 2:ncol(df)){
+    if(df[row,i] == "-") {
+      gap <- gap %>%
+        rbind((i-1))
+    }
+  }
+  if(row == 1){
+    gap_ref <<- gap
+  } else
+    gap_sam <<- gap
+}
+
+find_gaps(1) #find gaps in reference
+
+find_gaps(2) #find gaps in sample
+
+#count change in # due to gaps in sequence alignments
+gap_ref <- gap_ref %>%
+  mutate(count = row(gap_ref)) 
+
+gap_sam <- gap_sam %>%
+  mutate(count = row(gap_sam))
+
+colnames(gap_ref) <- c("Ref", "count")
+colnames(gap_sam) <- c("Ref", "count")
+
+```
+```{r, key}
+#create key to change from ref count to sample count
+ref_last <- as.numeric(width(ref_fasta))
+seq_last <- as.numeric(width(seq_fasta))
+df_last <- as.numeric(length(df)-1)
+
+key <- data.frame(Ref = 1:((ncol(df)-1))) %>% #dataframe with row for each nuc acid in aligned ref
+  left_join(gap_ref, by = join_by(Ref)) %>% #account for gaps in aligned reference
+  fill(count) %>%  #fill column to be able to subtract
+  replace(is.na(.), 0) %>% #fill NA with 0 to be able to subtract
+  mutate(ref_fasta = Ref - count) %>% #subtract gaps to reach original fasta positions
+  select(-count) %>%
+  left_join(gap_sam, by = join_by(Ref)) %>% #repeat with gaps in sample 
+  fill(count) %>%
+  replace(is.na(.), 0) %>%
+  mutate(sam_fasta = Ref - count)%>%
+  select(-count) %>%
+  filter(ref_fasta != ref_last) %>%
+  filter(sam_fasta != seq_last) %>%
+  rbind(c(df_last, ref_last, seq_last)) #fix last entry to have end lengths only appear once in key
+
+  
+#check that length of sample in key matches length of sample in uploaded fasta
+if(width(seq_fasta) != max(key$sam_fasta)) stop('key to account for gaps does not match length of sample sequence')
+
+#check that length of reference in key matches length of ref in uploaded fasta
+if(width(ref_fasta) != max(key$ref_fasta)) stop('key to account for gaps does not match length of reference sequence')
+```
+```{r, convert-table}
+#convert numbers in reference feature table to sequence base on key
+seq_features <- ref_features %>%
+  left_join(key, by = c('start' = 'ref_fasta')) %>%
+  rename(start_og = start) %>%
+  rename(start = sam_fasta) %>%  #rename sam_fasta positions as start positions
+  select(-start_og, -Ref) %>%
+  left_join(key, by = c('stop' = 'ref_fasta')) %>%
+  rename(stop_og = stop) %>%
+  rename(stop = sam_fasta) %>% 
+  select(start, stop, feature_name, qualifier_name, qualifier_value) #select only columns needed for table
+
+```
+```{r, write}
+write.table(seq_features, paste0('C:/Users/vhogan/Documents/Features/', name, '.txt'), sep = "\t", col.names = c(paste0(">Feature ", name), "", "", "", ""), row.names = FALSE, quote = FALSE, na = "")
+```
+
+```{r}
+#output sample sequence as character (can use to easily check specific positions)
+
+sam <- as.character(seq_fasta)
+sam_commas <- vapply(strsplit(sam, ""), function(x) paste(x, collapse=","), character(1L)) #add commas
+sam_sep <- unlist(strsplit(sam_commas, ",")) #sam sequence unlisted
+
+ref <- as.character(ref_fasta)
+ref_commas <- vapply(strsplit(ref, ""), function(x) paste(x, collapse=","), character(1L)) #add commas
+ref_sep <- unlist(strsplit(ref_commas, ",")) #sam sequence unlisted
+```
+```{r, check-start}
+#check codons at start position of each CDS
+
+check_start = data.frame(matrix(NA,    # Create empty data frame
+                      nrow = 0,
+                      ncol = 5)) 
+
+for(i in 1:nrow(seq_features)){
+  if(seq_features[i,3] == "CDS"){  #check i-th row of feature name for CDS
+    check_start <- check_start %>%
+      rbind(c(i, seq_features[i,3], 
+              sam_sep[seq_features[i,1]],
+              sam_sep[seq_features[i,1]+1],
+              sam_sep[seq_features[i,1]+2])) #check i-th row of start (for CDS only)
+  }
+}
+```
+```{r, check-stop}
+#check codons at stop position of each CDS
+
+check_stop = data.frame(matrix(NA,    # Create empty data frame
+                      nrow = 0,
+                      ncol = 5)) 
+
+for(i in 1:nrow(seq_features)){
+  if(seq_features[i,3] == "CDS"){  #check i-th row of feature name for CDS
+    check_stop <- check_stop %>%
+      rbind(c(i, seq_features[i,3], 
+              sam_sep[seq_features[i,2]-2],
+              sam_sep[seq_features[i,2]-1],
+              sam_sep[seq_features[i,2]])) #check i-th row of stop (for CDS only)
+  }
+}
+```
+```{r, translate-gaps}
+## getCodons - a function to split sequences into codons.
+# input (myAln) is a DNAStringSet with a gapped alignment
+# output is a simple list, one element for each sequence. Each list element is a character vector of each codon
+getCodons <- function(myAln) {
+  seqs <- as.character(myAln)
+  len <- width(myAln)[1]
+  starts <- seq(from=1, to=len, by=3)
+  ends <- starts + 2
+  myViews <- lapply(myAln, function(x) { 
+    Views(x, starts, ends)
+  })
+  myCodons <- lapply(myViews, function(x) {
+    as.character(DNAStringSet(x))
+  })
+  myCodons
+}
+
+## translateCodons - takes a character vector of codons as input, outputs the corresponding amino acids
+translateCodons <- function(myCodons, unknownCodonTranslatesTo="-") {
+  ## make new genetic code
+  gapCodon <- "-"
+  names(gapCodon) <- "---"
+  my_GENETIC_CODE <- c(GENETIC_CODE, gapCodon)
+  
+  ## translate the codons
+  pep <- my_GENETIC_CODE[myCodons]
+  
+  ## check for codons that were not possible to translate, e.g. frameshift codons
+  if (sum(is.na(pep))>0) {
+    cat("\nwarning - there were codons I could not translate. Using this character", unknownCodonTranslatesTo, "\n\n")
+    pep[ which(is.na(pep)) ] <- unknownCodonTranslatesTo
+  }
+  
+  ## prep for output
+  pep <- paste(pep, collapse="")
+  return(pep)
+}
+
+## wrap the getCodons and translateCodons functions together into one:
+translateGappedAln <- function(myAln, unknownCodonTranslatesTo="-") {
+  myCodons <- getCodons(myAln)
+  myAAaln <- AAStringSet(unlist(lapply(myCodons, translateCodons, unknownCodonTranslatesTo=unknownCodonTranslatesTo)))
+  return(myAAaln)
+}
+
+#function to align add translated sequence to df
+
+aa_to_df <- function(aa){
+  seq_char <- as.character(aa) #convert translated sequence to character
+  seq_commas <- vapply(strsplit(seq_char, ""), function(x) paste(x, collapse=","), character(1L)) #add commas between aa
+  seq_sep <- unlist(strsplit(seq_commas, ",")) #unlist to add to df
+  seq_name = names(aa) #name of sequence
+
+  
+  aa_df <<- aa_df %>%
+    rbind(c(seq_name, seq_sep))
+}
+
+#function to output location of stop codons
+find_stops <- function(df, stop_num){
+  for(i in 1:ncol(aa_df)){
+    if(aa_df[1,i] == "*") {
+      stops <<- stops %>%
+        rbind(c(aa_df[1,1], (i-1), stop_num, (length(aa_df)-1)))
+    }
+  }
+}
+
+```
+```{r}
+#function to check for stop codons within CDS
+
+CDS_check <- function(sam_start, sam_stop){
+  aa_subseq <- translateGappedAln(subseq(seq_fasta, start = sam_start, end = sam_stop))
+
+  aa_n = width(aa_subseq) #number of aa sample sequence
+  names = c("name", as.character(1:aa_n)) #names for columns of data frame
+
+  aa_df <<- data.frame(matrix(NA,    # Create empty data frame
+                        nrow = 0,
+                        ncol = aa_n+1)) 
+  
+  aa_to_df(aa_subseq)
+
+  colnames(aa_df) <- c("name", as.character(1:aa_n))
+  
+  find_stops(aa_df, sam_stop) #find stops in sample
+  
+  colnames(stops) <<- c("ID", "Stop_codon", "Stop", "Seg_aa_length")
+
+}
+```
+
+```{r}
+#filter feature table to just CDS
+sam_CDS <- seq_features %>%
+  filter(!(is.na(start))) %>%
+  filter(feature_name == "CDS" | feature_name == "")
+
+stops <- data.frame(matrix(NA,    # Create empty data frame
+                    nrow = 0,
+                    ncol = 4)) 
+
+#run through CDS table to check for internal stop codons in each
+#for(row in 1:nrow(sam_CDS)){
+for(row in 1:1){
+  print(paste(sam_CDS[row, 1], sam_CDS[row,2]))
+  CDS_check(sam_CDS[row, 1], sam_CDS[row,2])
+  
+  stops <<- stops %>%
+    filter(Stop_codon != Seg_aa_length)
+
+}
+
+#CDS_check(206,13400)
+
+```
+
+```{r}
+
+#write reference and sequence to fasta file for viewing in Geneious
+#writeLines(ref_char, 'C:/Users/vhogan/Documents/Features/ref_seq.fasta')
+#writeLines(seq_char, 'C:/Users/vhogan/Documents/Features/08225_seq.fasta')
+```
+
+
+
+
+
+
+

@@ -1,0 +1,386 @@
+---
+title: "SC2 2023 Sequencing Performance Analysis"
+author: "Vivian Hogan"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+
+#LOAD  LIBRARIES
+library(knitr)
+library(tidyverse)
+library(dplyr)  
+library(readr)
+library(viridis)
+library(plotly)
+library(ggplot2)
+library(ggpubr)
+library(readxl)
+library(purrr)
+library(DT)
+library(RColorBrewer)
+library(outbreakinfo)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+
+#load files
+
+#load Ct data
+ct_data <- read_excel(path = "/Users/vhogan/Documents/Seq_quality/Flu-Sc2_2023data_wk1-52_VH.xlsx", sheet = "Sheet1") %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  mutate(SampleID = gsub("-", "_", SampleID)) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  filter(grepl("CV23", SampleID) | grepl("SC2_23", SampleID))
+
+#library quant files upload
+lib_files <-list.files(path = "/Users/vhogan/Documents/Seq_quality/quants", pattern = "*.xlsx", full.names = T) %>%
+  lapply(read_excel, sheet = 10, skip=40) %>%
+  bind_rows() %>%
+  rename(SampleID = `Sample ID`) %>%
+  mutate(SampleID = gsub("-", "_", SampleID)) %>%
+  rename(lib_quant = `ng/µL`) %>%
+  filter(SampleID!=0) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  filter(grepl("CV23", SampleID) | grepl("SC2_23", SampleID)) %>%
+  select(SampleID, lib_quant) %>%
+  mutate(SampleID = gsub("_V5", "", SampleID)) %>%
+  mutate(SampleID = gsub("_MIDV2", "", SampleID))
+  
+
+amp_files <- list.files(path = "/Users/vhogan/Documents/Seq_quality/quants", pattern = "*.xlsx", full.names = T) %>%
+  lapply(read_excel, sheet = 4, skip=39) %>%
+  bind_rows() %>%
+  rename(SampleID = `Sample ID`) %>%
+  mutate(SampleID = gsub("-", "_", SampleID)) %>%
+  rename(amp_quant = `ng/µL`) %>%
+  filter(SampleID!=0) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  filter(grepl("CV23", SampleID) | grepl("SC2_23", SampleID))%>%
+  select(SampleID, amp_quant) %>%
+  mutate(SampleID = gsub("_V5", "", SampleID)) %>%
+  mutate(SampleID = gsub("_MIDV2", "", SampleID))
+
+#load all performance files and select GEIS specimens
+performance <-list.files(path = "/Users/vhogan/Documents/Seq_quality/performance", pattern = "*performance.xlsx", full.names = T) %>%
+  lapply(read_excel) %>%
+  bind_rows() %>%
+  rename(SampleID = Sample) %>%
+  mutate(SampleID = gsub("-", "_", SampleID)) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  filter(grepl(paste(c("CV23", "SC2_23"), collapse='|'), SampleID)) %>%
+  mutate(SampleID = gsub("_V5", "", SampleID)) %>%
+  mutate(SampleID = gsub("_MIDV2", "", SampleID)) %>%
+  mutate(`%>=20x` = as.numeric(`%>=20x`)) %>%
+  mutate(AvgCov = as.numeric(AvgCov))
+
+  
+#load all lineage (nextclade and pangolin) files and select GEIS specimens
+
+nextclade_files <- list.files(path = "/Users/vhogan/Documents/Seq_quality/performance", pattern ="*lineage.xlsx", full.names = T)  %>%
+  lapply(read_excel, sheet = "Nextclade") %>%
+  bind_rows() %>%
+  rename(SampleID = seqName) %>%
+  mutate(SampleID = gsub("-", "_", SampleID)) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  filter(grepl(paste(c("CV23", "SC2_23"), collapse='|'), SampleID)) %>%
+  mutate(SampleID = gsub("_V5", "", SampleID)) %>%
+  mutate(SampleID = gsub("_MIDV2", "", SampleID))
+
+pangolin_files <- list.files(path = "/Users/vhogan/Documents/Seq_quality/performance", pattern ="*lineage.xlsx", full.names = T)  %>%
+  lapply(read_excel, sheet = "Pangolin") %>%
+  bind_rows() %>%
+  rename(SampleID = taxon) %>%
+  mutate(SampleID = gsub("-", "_", SampleID)) %>%
+  mutate(SampleID = toupper(SampleID)) %>%
+  filter(grepl(paste(c("CV23", "SC2_23"), collapse='|'), SampleID)) %>%
+  mutate(SampleID = gsub("_V5", "", SampleID)) %>%
+  mutate(SampleID = gsub("_MIDV2", "", SampleID))
+
+
+#combine Ct and performance/lineage data
+joined_data <- amp_files %>%
+  left_join(lib_files, by = "SampleID") %>%
+  left_join(ct_data, by = "SampleID") %>%
+  left_join(performance, by = "SampleID") %>%
+  left_join(pangolin_files, by = "SampleID") %>%
+  left_join(nextclade_files, by = "SampleID") #%>%
+  #count(SampleID) #use to check for duplicates
+  
+
+#Show missing data
+missing_perf <- ct_data %>%
+  filter(!(SampleID %in% performance$SampleID))
+
+missing_quant <- ct_data %>%
+  filter(!(SampleID %in% amp_files$SampleID))
+
+missing_ct <- amp_files %>%
+  filter(!(SampleID %in% ct_data$SampleID))
+
+
+#print(paste("Missing performance data for", nrow(missing_perf), "samples")) 
+#print(paste("Missing quant data for", nrow(missing_quant), "samples")) #Week 25 quant workbook was written over
+#print(paste("Missing Ct data for", nrow(missing_ct), "samples")) #wk39 and 47
+
+```
+
+```{r}
+ct_violin <- joined_data %>%
+  plot_ly(y=~SC2, x = ~Week,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          text = ~paste('</br>', joined_data$SampleID, '</br>SC2 Ct: ', joined_data$SC2, '</br>RP: ', joined_data$RP), 
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='Weekly SC2 Ct',
+         yaxis = list(title = 'SC2 Ct'))
+
+ct_violin
+```
+#### <span style="color: blue;">Specimens with SC2 Ct = 0, n = 76</span>
+##### <span style="color: grey;">Split into 3 categories below</span>
+
+```{r}
+zero_ct <- joined_data %>%
+  filter(SC2 == 0) %>%
+  select(SampleID, amp_quant, lib_quant, RP, SC2, Week, AvgCov, `%>=20x`, lineage)
+
+zero_ct_negative <- zero_ct %>%
+  filter(AvgCov < 1)
+
+zero_ct_bad_seq <- zero_ct %>% 
+  filter(AvgCov >= 1 & lineage == "Unassigned")
+
+zero_ct_good_seq <- zero_ct %>%
+  filter(AvgCov >= 1 & lineage != "Unassigned")
+
+```
+<br>
+
+#### <span style="color: blue;">SC2 Negative Specimens, n = 46</span>
+##### <span style="color: grey;">SC2 Ct = 0, AvgCov < 1 </span>
+```{r}
+datatable(zero_ct_negative)
+```
+<br>
+
+#### <span style="color: blue;">Poor quality SC2 sequencing with SC2 Ct = 0, n = 18</span>
+##### <span style="color: grey;">SC2 Ct = 0, AvgCov > 1, lineage = Unassigned</span>
+```{r}
+datatable(zero_ct_bad_seq)
+```
+<br>
+
+#### <span style="color: blue;">SC2 discrepant specimens, PCR negative, but sequence well, n = 12 (4 invalid on flu/sc2)</span>
+##### <span style="color: grey;">SC2 Ct = 0, lineage assigned</span>
+```{r}
+datatable(zero_ct_good_seq)
+```
+
+
+```{r}
+amp_quant_ct <- joined_data %>%
+  plot_ly(x=~SC2, y =~amp_quant) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = joined_data$Protocol, 
+            colors = c('green', 'purple'),
+            text = ~paste('</br>', joined_data$SampleID, '</br>SC2 Ct: ', joined_data$SC2, '</br>RP: ', joined_data$RP),
+            hoverinfo = 'text') %>%
+
+  layout(title ='Amplicon Quant vs. SC2 CT Values',
+            yaxis = list(title = 'Amplicon Quant (ng/µL)', tickvals = seq(0, 110, 5)), 
+            xaxis = list(title='SC2 CT Values', tickvals = seq(0, 45, 5), showlegend = T))
+
+amp_quant_ct 
+```
+```{r}
+lib_quant_ct <- joined_data %>%
+  plot_ly(x=~SC2, y =~lib_quant) %>%
+            add_trace(
+            type = 'scatter', 
+            mode = 'markers', 
+            color = joined_data$Protocol, 
+            colors = c('green', 'purple'),
+            text = ~paste('</br>', joined_data$SampleID, '</br>SC2 Ct: ', joined_data$SC2, '</br>RP: ', joined_data$RP), 
+            hoverinfo = 'text') %>%
+
+  layout(title ='Library Quant vs. SC2 CT Values',
+            yaxis = list(title = 'Library Quant (ng/µL)', tickvals = seq(0, 110, 5)), 
+            xaxis = list(title='SC2 CT Values', tickvals = seq(0, 45, 5), showlegend = T))
+
+lib_quant_ct 
+```
+```{r}
+amp_quant_violin <- joined_data %>%
+  plot_ly(y=~amp_quant, x = ~Week,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          color = joined_data$Protocol, 
+          colors = c('green', 'purple'),
+          text = ~paste('</br>', joined_data$SampleID, '</br>SC2 Ct: ', joined_data$SC2, '</br>RP: ', joined_data$RP),
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='Weekly Amplicon Quants.',
+         yaxis = list(title = 'ng/µL'))
+amp_quant_violin
+```
+
+##### <span style="color: grey;">Why is wk 36 library quant so low with Midnight?</span>
+```{r}
+lib_quant_violin <- joined_data %>%
+  plot_ly(y=~lib_quant, x = ~Week,
+          type = 'violin', 
+          points = "all", 
+          box = list(visible = T), 
+          jitter =1,
+          pointpos =0, 
+          color = joined_data$Protocol, 
+          colors = c('green', 'purple'),
+          text = ~paste('</br>', joined_data$SampleID, '</br>SC2 Ct: ', joined_data$SC2, '</br>RP: ', 
+                        joined_data$RP, '</br>%>=20x: ', joined_data$`%>=20x`), 
+          hoverinfo = 'text',
+          width = 0.2) %>%
+  layout(title ='Weekly Library Quants.',
+         yaxis = list(title = 'ng/µL'))
+lib_quant_violin
+```
+```{r}
+ct_percent_genome <- joined_data %>% 
+   plot_ly(
+     x =  ~ SC2,
+     y =  ~ `%>=20x`,
+     color = joined_data$Protocol,
+     type = 'scatter',
+     mode = 'markers',
+     text = ~paste('</br>', joined_data$SampleID, '</br>SC2 Ct: ', joined_data$SC2, '</br>RP: ', 
+                   joined_data$RP, '</br>lineage: ', joined_data$lineage),
+     hoverinfo = 'text',
+     colors = c('green', 'purple')) %>%
+  
+   layout(
+     title = "% Genome(20x) vs. SC2 CT Values",
+     legend=list(title=list(text='      Protocol')),
+     yaxis = list(
+       title = '% Genome(20x)',
+       tickvals = seq(0, 100, 5)),
+     xaxis = list(
+       title = 'SC2 CT Values',
+       tickvals = seq(0, 45, 5)),
+     autosize = F, width = 800, height = 500)
+     
+ ct_percent_genome
+```
+```{r, include=FALSE}
+#ANOVA on Nextclade percent coverage with independent variables: N1, Rp, & SampleType
+Nextclade_anova <- aov(`%>=20x` ~ SC2 + RP + Protocol, data = joined_data)
+
+summary(Nextclade_anova) #view results
+
+#ANOVA on Nextclade qcoverallScore with independent variables: N1, Rp, & SampleType
+Nextclade_anova <- aov(`qc.overallScore` ~ SC2 + RP + Protocol, data = joined_data)
+
+summary(Nextclade_anova) #view results
+```
+```{r, message=FALSE, warning=FALSE}
+#Remove entried with NA for QC overall score then plot N1 vs %Genome colored by qcoverallscore. Reverse color scale to match theme with ambiguity score (yellow = good). Opacity <1 to show density. Hover text includes Sample ID and numeric value of qcoverallscore.
+ct_genome_nextclade <- joined_data %>% 
+   #filter(!is.na(`qc.overallScore`)) %>%
+   plot_ly(x =  ~ SC2, y =  ~ `%>=20x`) %>%
+     add_trace(type = 'scatter',
+     mode = 'markers',
+     marker = list(
+       color = ~`qc.overallScore`,
+       opacity = 0.9,
+       colorscale = "Viridis",
+       reversescale =T,
+       autocolorscale = FALSE, 
+       cauto = FALSE,
+       coloraxis= list(cmin=0, cmax=100), #Trying to set min and max and color scale, but not working
+       colorbar =list(title="QC Overall Score")),
+     text = ~paste('</br>', SampleID, '</br>SC2 Ct: ', joined_data$SC2, 
+                   '</br>RP: ', joined_data$RP,
+                   '</br>Protocol:', joined_data$Protocol,
+                   '</br>QC Overall Score: ', `qc.overallScore`),
+     hoverinfo = 'text') %>% 
+  
+   layout(
+     title = "SC2 Ct vs Percent Genome Coverage (20x)",
+     yaxis = list(
+       title = 'Percent Genome Coverage (20x)',
+       tickvals = seq(0, 100, 5)),
+     xaxis = list(
+       title = 'SC2 CT Values',
+       tickvals = seq(0, 45, 5)),
+     autosize = F, width = 800, height = 500)
+
+     
+ ct_genome_nextclade
+```
+```{r, message = FALSE, include=FALSE}
+
+#Provide GISAID credentials using 
+#authenticateUser() #vivhogan #hint: HJFsept22
+```
+
+```{r, message=FALSE,include=FALSE}
+
+#plot lineages by location
+
+#To define own color palette instead of using default colors
+#cols <- 13
+#mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(cols)
+
+#plot <- plotAllLineagesByLocation(location = "United States", other_threshold = 0.05, ndays = 440) + 
+#          #scale_fill_manual(values = mycolors) + #use own color palette
+#          scale_x_date(
+#                 limits = as.Date(c('2023-01-01','2024-01-01')))
+
+#plot + theme(legend.position="none") 
+
+```
+```{r}
+lineages <- joined_data %>%
+  filter(!(is.na(Nextclade_pango))) %>%
+  count(Nextclade_pango)
+
+#Define number for threshold to count as other
+other_thresh = 5
+
+other <-lineages %>%
+  filter(n < other_thresh)
+  
+other_count <- data.frame("other", sum(other$n))
+colnames(other_count) = c("Nextclade_pango", "n")
+
+lineages_other <- lineages %>%
+  filter(n >= other_thresh) %>%
+  bind_rows(other_count)
+
+```
+<br>
+
+#### <span style="color: blue;">GEIS PHT Specimens lineage prevalence 2023</span>
+##### <span style="color: gray;">Lineages with <5 specimens included in "other"</span>
+```{r}
+lineage_plot <- lineages_other %>%
+  ggplot(aes(x=Nextclade_pango, y = n)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 60, hjust=1))
+
+lineage_plot
+```
+
+
