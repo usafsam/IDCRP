@@ -1,0 +1,306 @@
+---
+title: "ARIA Data Pull"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(readxl)
+library(stringr)
+library(survival)
+library(ggsurvfit)
+
+```
+```{r}
+#Upload data
+#
+#
+#
+##################Change file name/location as needed#######################################################################
+access_data <- read_excel("/Users/vhogan/Documents/ARIA/Statistics/ARIA_Data_Cum_29May24.xlsx"
+                          , col_types = "text"
+                          )
+
+#Without specifiying column types it throws warnings and deletes some data on cumulative data file:/
+```
+```{r}
+#Convert change flag to 0/1
+#use decision criteria to determine final result for InfA, H1, H3, InfB, and SC2
+#Add InfA_check = 1 whenever InfA is unsubtyped in final result columns
+#create temporary fluSC2_result and InfA_subtyping_result fields to combine with luminex result for final result column
+#combine RPP and PCR data comments
+#remove internal comments sandwiched between #
+data_all <- access_data %>%
+  mutate(usafsam_change_flag = ifelse(tolower(usafsam_change_flag) == "no", 0,
+                                      ifelse(tolower(usafsam_change_flag) == "yes", 1, "ERROR"))) %>%
+  mutate(final_sc2 = case_when(
+                              (sc2_ct < 40 & sc2_ct > 0) | luminex_sc2 == "Positive" ~ "Positive",
+                              (sc2_ct >= 40 | sc2_ct == 0) & ((rp_ct < 35 & rp_ct >0) | 
+                                                                 (flu_a_ct < 40 & flu_a_ct > 0) | 
+                                                                 (flu_b_ct < 40 & flu_b_ct > 0)) ~ "Negative",
+                              (sc2_ct >= 40 | sc2_ct == 0) & (flu_a_ct >= 40 | flu_a_ct == 0) & 
+                                  (flu_b_ct >= 40 | flu_b_ct == 0) & (rp_ct >= 35 | rp_ct == 0) ~ "Invalid",
+                              TRUE ~ "ERROR")) %>%
+  mutate(final_flu_a = case_when(
+                                (flu_a_ct < 40 & flu_a_ct > 0) | influenza_a == "Positive" | 
+                                  influenza_a_h1 == "Positive" | influenza_a_h3 =="Positive" ~ "Positive",
+                                (flu_a_ct >= 40 | flu_a_ct == 0) & 
+                                   ((rp_ct < 35 & rp_ct >0) | (sc2_ct < 40 & sc2_ct > 0) | (flu_b_ct < 40 & flu_b_ct > 0)) ~ "Negative",
+                                (sc2_ct >= 40 | sc2_ct == 0) & (flu_a_ct >= 40 | flu_a_ct == 0) & 
+                                   (flu_b_ct >= 40 | flu_b_ct == 0) & (rp_ct >= 35 | rp_ct == 0) ~ "Invalid", 
+                                TRUE ~ "ERROR")) %>%
+  mutate(final_flu_a_h1 = case_when(
+                                    influenza_a_h1 == "Positive" ~ "Positive",
+                                    InfA_subtyping_note == "H1pdm09" ~ "Positive",
+                                    TRUE ~ "Negative")) %>%
+  mutate(final_flu_a_h3 = case_when(
+                                    influenza_a_h3 == "Positive" ~ "Positive",
+                                    InfA_subtyping_note == "H3" ~"Positive",
+                                    TRUE ~ "Negative")) %>%
+  #Check that all InfA pos has assigned subtype
+  mutate(infA_check = case_when(lab_id == "A10-07086-7-Ag" ~ 0, #exception for this specimen, unable to subtype due to later testing negative
+                                final_flu_a == "Positive" & final_flu_a_h1 == "Negative" & final_flu_a_h3 == "Negative" ~ 1,
+                                TRUE ~ 0))%>%
+  mutate(final_flu_b = case_when(
+                                (flu_b_ct < 40 & flu_b_ct > 0) | influenza_b == "Positive" ~ "Positive",
+                                (flu_b_ct >= 40 | flu_b_ct == 0) & 
+                                  ((rp_ct < 35 & rp_ct >0) | (sc2_ct < 40 & sc2_ct > 0) | (flu_a_ct < 40 & flu_a_ct > 0)) ~ "Negative",
+                                (sc2_ct >= 40 | sc2_ct == 0) & (flu_a_ct >= 40 | flu_a_ct == 0) & 
+                                  (flu_b_ct >= 40 | flu_b_ct == 0) & (rp_ct >= 35 | rp_ct == 0) ~ "Invalid", 
+                                TRUE ~ "ERROR")) %>%
+  mutate(fluSC2_result = case_when(
+                                  (sc2_ct >= 40 | sc2_ct == 0) & (flu_a_ct >= 40 | flu_a_ct == 0) & 
+                                  (flu_b_ct >= 40 | flu_b_ct == 0) & (rp_ct >= 35 | rp_ct == 0) ~ "Invalid",
+                                  (sc2_ct < 40 & sc2_ct > 0) & (flu_a_ct < 40 & flu_a_ct > 0) & (flu_b_ct < 35 & flu_b_ct > 0) ~ "InfA, InfB, SARS-CoV-2 Positive", 
+                                  (sc2_ct < 40 & sc2_ct > 0) & (flu_a_ct < 40 & flu_a_ct > 0) ~ "InfA, SARS-CoV-2 Positive",
+                                  (sc2_ct < 40 & sc2_ct > 0) & (flu_b_ct < 35 & flu_b_ct > 0) ~ "InfB, SARS-CoV-2 Positive",
+                                  (flu_a_ct < 40 & flu_a_ct > 0) & (flu_b_ct < 35 & flu_b_ct > 0) ~ "InfA, InfB Positive",
+                                  (sc2_ct < 40 & sc2_ct > 0) ~ "SARS-CoV-2 Positive",
+                                  (flu_a_ct < 40 & flu_a_ct > 0) ~ "InfA Positive", 
+                                  (flu_b_ct < 40 & flu_b_ct > 0) ~ "InfB Positive",
+                                  (rp_ct < 35 & rp_ct > 0) ~ "FluSC2 Negative",
+                                  TRUE ~ "ERROR")) %>%
+  mutate(RPP_Result = ifelse(RPP_Result == "Negative", "RPP Negative", RPP_Result)) %>%
+  mutate(InfA_subtyping_result = case_when(InfA_subtyping_note == "H1pdm09" ~ "Influenza A H1 Positive",
+                                      InfA_subtyping_note == "H3" ~ "Influenza A H3 Positive")) %>%
+  unite(almost_final_result, c(RPP_Result, fluSC2_result), na.rm = FALSE, sep = "; ", remove = FALSE) %>% #combine rpp result and flusc2 result with NA included
+  unite(final_result, c(almost_final_result, InfA_subtyping_result), na.rm = TRUE, sep = "; ", remove = TRUE) %>% #combine previous field with subtyping result, only when available
+  unite(data_comments, c(RPPdataComments, PCR_comments), na.rm = TRUE, sep = ", ", remove = TRUE) %>% #combine comments
+  mutate(data_comments = str_replace_all(data_comments, "%(\\w+\\s+)*\\w+%", "")) %>%
+  mutate(data_comments = str_replace_all(data_comments, "%(\\w+\\s+)*-(\\s+\\w+)*%", "")) %>%
+  mutate(data_comments = str_replace_all(data_comments, "%(\\w+\\s+)*\\[\\w+\\s+\\w+\\]%", "")) %>%
+  mutate(usafsam_comments = str_replace_all(usafsam_comments, "%(\\w+\\s+)*\\w+%", "")) %>%
+  mutate(usafsam_comments = str_replace_all(usafsam_comments, "%(\\w+\\s+)*-(\\s+\\w+)*%", "")) %>%
+  mutate(usafsam_comments = str_replace_all(usafsam_comments, "%(\\w+\\s+)*\\[\\w+\\s+\\w+\\]%", "")) %>%
+  #Flu sequencing complete when 1. flu cts not between 0-36 or 2. cts between 0-36 and has seq date, otherwise no
+  mutate(flu_seq_complete = case_when((flu_a_ct == 0 | flu_a_ct >=36) & (flu_b_ct == 0 | flu_b_ct >=36)  ~ "Yes",
+                                      ((flu_a_ct > 0 & flu_a_ct <36) | (flu_b_ct > 0 & flu_b_ct < 36)) & !is.na(date_flu_sequence) ~ "Yes",
+                                      !is.na(flu_sequencing_notes) ~ "Yes",
+                                       TRUE ~ "No")) %>%
+  #SC2 sequencing complete when 1. sc2 ct not between 0-36 or 2. sc2 ct between 0-36 and has seq date, otherwise no
+  mutate(sc2_seq_complete = case_when(sc2_ct == 0 | sc2_ct >=36  ~ "Yes",
+                                      sc2_ct > 0 & sc2_ct <36 & !is.na(date_sc2_sequence) ~ "Yes",
+                                       TRUE ~ "No")) %>%
+  #Adeno, RSV, and Entero all considered incomplete if positive on luminex until Ct is obtained
+  mutate(adeno_seq_complete = case_when(adenovirus == "Negative" ~ "Yes",
+                                        is.na(adeno_ct) ~ "No",
+                                        adeno_ct == 0 | adeno_ct >=36 ~ "Yes",
+                                        !is.na(adeno_seq_date) | !is.na(adeno_seq_notes) ~ "Yes",
+                                        TRUE ~ "No")) %>%
+  mutate(rsv_seq_complete = case_when(rsv_a == "Negative" & rsv_b == "Negative" ~ "Yes",
+                                      is.na(rsv_ct) ~ "No",
+                                      rsv_ct == 0 | rsv_ct >=36 ~ "Yes",
+                                      !is.na(other_seq_date) | !is.na(other_seq_notes) ~ "Yes",
+                                        TRUE ~ "No")) %>%
+  mutate(entero_seq_complete = case_when(rhino_enterovirus == "Positive" ~ "No",
+                                        TRUE ~ "Yes")) %>%
+  #Complete if all 5 sequencing are complete, Report Yes as 1 and No as 0
+  mutate(final_result = case_when(adeno_ct <= 40 & adeno_ct != 0 ~ paste0(final_result, "; Adenovirus Positive"),
+                                  rsv_ct <= 40 & rsv_ct != 0 ~ paste0(final_result, "; Respiratory Syncytial Virus Positive"),
+                                  TRUE ~ final_result)) %>%
+  mutate(lab_data_complete = case_when(is.na(pcr_date) ~ 0,
+                                       is.na(rpp_date) & test_type == "PCR" ~ 0,
+                                       flu_seq_complete == "Yes" & sc2_seq_complete == "Yes" & adeno_seq_complete == "Yes" 
+                                       & rsv_seq_complete == "Yes" & entero_seq_complete == "Yes" ~ 1,
+                                       TRUE ~ 0))
+```
+```{r}
+data_all <- data_all %>%
+  filter(date_collected < 45307) %>%
+  mutate(result = ifelse(grepl('Positive', final_result), 'Positive', 'Negative')) %>%
+  filter(!grepl("^P138-S10-9", record_id)) %>% #remove entries with unknown participant
+  filter(!grepl('nvalid', final_sc2))  #remove invalid sc2 results
+
+#arm_1 is initial visit - need record_id, date, result (Pos/Neg)
+arm_1 <- data_all %>%
+  filter(redcap_event_name == 'medical_encounter_arm_1') %>%
+  select(record_id, date_collected, result) %>%
+  mutate(date_collected = as.numeric(date_collected)) %>%
+  rename(date_collected_1 = date_collected) %>%
+  rename(result_1 = result) %>%
+  unique() # remove identical entries from multiple swab collection
+
+#list IDs with more than one entry, must have one neg and one pos
+arm_1_count <- arm_1 %>%
+  count(record_id) %>%
+  filter(n > 1)
+
+#Remove negative entry in duplicates, count as positive since one swab is positive
+arm_1_unique <- arm_1 %>%
+  filter(!(record_id %in% arm_1_count$record_id & result_1 == 'Negative'))
+
+#check that duplicates have been removed
+arm_1_unique_check <- arm_1_unique %>%
+  count(record_id) %>%
+  filter(n > 1)
+
+if(nrow(arm_1_unique_check) > 0){
+  stop("Duplicate records detected in arm 1")
+} 
+  
+  
+#arm_1b is second visit - need record_id, date, and result (Pos/Neg)
+arm_1b <- data_all %>%
+  filter(redcap_event_name == 'medical_encounter_arm_1b') %>%
+  select(record_id, date_collected, result) %>%
+  mutate(date_collected = as.numeric(date_collected)) %>%
+  rename(date_collected_1b = date_collected) %>%
+  rename(result_1b = result) %>%
+  unique() # remove identical entries from multiple swab collection
+
+#list IDs with more than one entry, must have one neg and one pos
+arm_1b_count <- arm_1b %>%
+  count(record_id) %>%
+  filter(n > 1)
+
+#Remove negative entry in duplicates, count as positive since one swab is positive
+arm_1b_unique <- arm_1b %>%
+  filter(!(record_id %in% arm_1b_count$record_id & result_1b == 'Negative'))
+
+#check that duplicates have been removed
+arm_1b_unique_check <- arm_1b_unique %>%
+  count(record_id) %>%
+  filter(n > 1)
+
+if(nrow(arm_1b_unique_check) > 0){
+  stop("Duplicate records detected in arm 2")
+} 
+
+#if no second visit, set time to 365 to include as censored data
+arm_comp <- left_join(arm_1_unique, arm_1b_unique, by = join_by(record_id)) %>%
+  mutate(time = date_collected_1b - date_collected_1) %>% #time between visits
+  mutate(time = ifelse(is.na(date_collected_1b), 365, time)) %>%
+  mutate(event = ifelse(is.na(date_collected_1b), 0, 1)) #event occurred if second visit occurred
+```
+```{r}
+#Kaplan-Meier curve to show time to second visit within a year
+
+#survival::Surv - creates survival object for use in function
+#ggsurvfit::survfit2 - creates survival curves using the Kaplan-Meier method
+survfit2(Surv(time, event) ~ 1, data = arm_comp) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Days",
+    y = "Probability"
+  )  + 
+  add_confidence_interval()
+
+```
+```{r}
+#Does having an identified positive result (of any pathogen) statistically influence curve, using log rank test
+
+survfit2(Surv(time, event) ~ result_1, data = arm_comp) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Days",
+    y = "Probability"
+  )  + 
+  add_confidence_interval()
+
+survdiff(Surv(time, event) ~ result_1, data = arm_comp)  
+```
+
+```{r}
+#SC2 log rank test
+#arm_1 is initial visit - need record_id, date, final_sc2 (Pos/Neg)
+sc2_arm_1 <- data_all %>%
+  filter(redcap_event_name == 'medical_encounter_arm_1') %>%
+  select(record_id, date_collected, final_sc2) %>%
+  mutate(date_collected = as.numeric(date_collected)) %>%
+  rename(date_collected_1 = date_collected) %>%
+  rename(result_1 = final_sc2) %>%
+  unique() # remove identical entries from multiple swab collection
+
+#list IDs with more than one entry, must have one neg and one pos
+sc2_arm_1_count <- sc2_arm_1 %>%
+  count(record_id) %>%
+  filter(n > 1)
+
+#Remove negative entry in duplicates, count as positive since one swab is positive
+sc2_arm_1_unique <- sc2_arm_1 %>%
+  filter(!(record_id %in% sc2_arm_1_count$record_id & result_1 == 'Negative'))
+
+#check that duplicates have been removed
+sc2_arm_1_unique_check <- sc2_arm_1_unique %>%
+  count(record_id) %>%
+  filter(n > 1)
+
+if(nrow(sc2_arm_1_unique_check) > 0){
+  stop("Duplicate records detected in arm 1 SC2 results")
+} 
+  
+  
+#arm_1b is second visit - need record_id, date, and result (Pos/Neg)
+sc2_arm_1b <- data_all %>%
+  filter(redcap_event_name == 'medical_encounter_arm_1b') %>%
+  select(record_id, date_collected, final_sc2) %>%
+  mutate(date_collected = as.numeric(date_collected)) %>%
+  rename(date_collected_1b = date_collected) %>%
+  rename(result_1b = final_sc2) %>%
+  unique() # remove identical entries from multiple swab collection
+
+#list IDs with more than one entry, must have one neg and one pos
+sc2_arm_1b_count <- sc2_arm_1b %>%
+  count(record_id) %>%
+  filter(n > 1)
+
+#Remove negative entry in duplicates, count as positive since one swab is positive
+sc2_arm_1b_unique <- sc2_arm_1b %>%
+  filter(!(record_id %in% sc2_arm_1b_count$record_id & result_1b == 'Negative'))
+
+#check that duplicates have been removed
+sc2_arm_1b_unique_check <- sc2_arm_1b_unique %>%
+  count(record_id) %>%
+  filter(n > 1)
+
+if(nrow(sc2_arm_1b_unique_check) > 0){
+  stop("Duplicate records detected in arm 2 SC2 results")
+} 
+
+#if no second visit, set time to 365 to include as censored data
+sc2_arm_comp <- left_join(sc2_arm_1_unique, sc2_arm_1b_unique, by = join_by(record_id)) %>%
+  mutate(time = date_collected_1b - date_collected_1) %>% #time between visits
+  mutate(time = ifelse(is.na(date_collected_1b), 365, time)) %>%
+  mutate(event = ifelse(is.na(date_collected_1b), 0, 1)) #event occurred if second visit occurred
+
+```
+```{r}
+#Does having an SC2 positive result statistically influence curve, using log rank test
+
+survfit2(Surv(time, event) ~ result_1, data = sc2_arm_comp) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Days",
+    y = "Probability"
+  )  + 
+  add_confidence_interval()
+
+survdiff(Surv(time, event) ~ result_1, data = sc2_arm_comp)  
+```
+

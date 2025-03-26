@@ -1,0 +1,292 @@
+---
+title: "Influenza Mutation Finder"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(stringr)
+library(Biostrings)
+library(pwalign)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r, user-input}
+#upload concatenated sequences
+seqs_fasta <- readDNAStringSet("C:/Users/vhogan/Documents/Flu/ARIA_fastas/consensus_fastas/250313/A10-10909-3-PCR_infB_S22.consensus.fasta")
+
+#User input Inf type (H1N1, H3N2, B)
+type = "H3N2"
+
+#User input gene (PA, HA, NA, M2)
+gene = "NA"
+```
+```{r, ref}
+#location of fasta reference files
+ref_file = case_when(type == "H1N1" & gene == "PA" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/h1n1reference_PA.fasta",
+                     type == "H1N1" & gene == "HA" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/h1n1reference_HA.fasta",
+                     type == "H1N1" & gene == "NA" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/h1n1reference_NA.fasta",
+                     type == "H1N1" & gene == "M2" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/h1n1reference_MP.fasta",
+                     type == "H3N2" & gene == "PA" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/h3n2reference_PA.fasta",
+                     type == "H3N2" & gene == "HA" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/h3n2reference_HA.fasta",
+                     type == "H3N2" & gene == "NA" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/h3n2reference_NA.fasta",
+                     type == "H3N2" & gene == "M2" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/h3n2reference_MP.fasta",
+                     type == "B" & gene == "PA" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/vicreference_PA.fasta",
+                     type == "B" & gene == "HA" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/vicreference_HA.fasta",
+                     type == "B" & gene == "NA" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/vicreference_NA.fasta",
+                     type == "B" & gene == "M2" ~ "C:/Users/vhogan/Documents/Flu/reference_fastas/vicreference_MP.fasta")
+
+#read in ref file as DNAStringSet based on gene and type
+ref_fasta = readDNAStringSet(ref_file)
+
+#Function to trim fastas to specified length based on length of gene segment
+trim_to_roi <- function(type, gene, fasta){
+#Select M2 portion of MP gene
+    if (type == "H1N1" & gene == "PA"){
+      trimmed_fasta <<- subseq(fasta, start = 1, end = 2151)
+    }
+    if (type == "H3N2" & gene == "PA"){
+      trimmed_fasta <<- subseq(fasta, start = 9, end = 2159)
+    }
+    if (type == "B" & gene == "PA"){
+      trimmed_fasta <<- subseq(fasta, start = 21, end = 2201)
+    }
+    if ((type == "H1N1" | type == "H3N2") & gene == "HA"){
+      trimmed_fasta <<- subseq(fasta, start = 1, end = 1701)
+    }
+    if (type == "B" & gene == "HA"){
+      trimmed_fasta <<- subseq(fasta, start = 22, end = 1779)
+    }
+    if ((type == "H1N1" | type == "H3N2") & gene == "NA"){
+      trimmed_fasta <<- subseq(fasta, start = 1, end = 1410)
+    }
+    if (type == "B" & gene == "NA"){
+      trimmed_fasta <<- subseq(fasta, start = 54, end = 1454)
+    }
+    if ((type == "H1N1") & gene == "M2"){
+      trimmed_fasta <<- xscat(subseq(fasta, start = 1, end = 26), subseq(fasta, start= 715, end = 982))
+    }
+    if ((type == "H3N2") & gene == "M2"){
+      trimmed_fasta <<- xscat(subseq(fasta, start = 1, end = 26), subseq(fasta, start= 715, end = 971))
+    }
+    if (type == "B" & gene == "M2"){
+      trimmed_fasta <<- subseq(fasta, start = 749, end = 1078)
+    }
+}
+
+#trim, translate, and put ref fasta into new dataframe
+trim_to_roi(type, gene, ref_fasta)
+trimmed_ref <- trimmed_fasta
+ref_aa <- translate(trimmed_ref, if.fuzzy.codon = "solve")
+ref <- as.character(ref_aa)
+ref_commas <- vapply(strsplit(ref, ""), function(x) paste(x, collapse=","), character(1L)) #add commas between aa
+ref_sep <- unlist(strsplit(ref_commas, ","))
+ref_name = names(ref_fasta) #name of reference sequence
+
+n = width(ref_aa) #number of aa in ref sequence
+names = c("name", as.character(1:n)) #names for columns of data frame
+
+df <- data.frame(matrix(NA,    # Create empty data frame
+                        nrow = 0,
+                        ncol = n+1)) %>%
+  rbind(c(ref_name, ref_sep))  #add ref sequence as first row
+
+
+colnames(df) <- names #add column names to df
+```
+```{r, functions}
+######### some functions to translate gapped alignments:
+#from https://github.com/Bioconductor/Biostrings/issues/30
+
+## getCodons - a function to split sequences into codons.
+# input (myAln) is a DNAStringSet with a gapped alignment
+# output is a simple list, one element for each sequence. Each list element is a character vector of each codon
+getCodons <- function(myAln) {
+  seqs <- as.character(myAln)
+  len <- width(myAln)[1]
+  starts <- seq(from=1, to=len, by=3)
+  ends <- starts + 2
+  myViews <- lapply(myAln, function(x) { 
+    Views(x, starts, ends)
+  })
+  myCodons <- lapply(myViews, function(x) {
+    as.character(DNAStringSet(x))
+  })
+  myCodons
+}
+
+## translateCodons - takes a character vector of codons as input, outputs the corresponding amino acids
+translateCodons <- function(myCodons, unknownCodonTranslatesTo="-") {
+  ## make new genetic code
+  gapCodon <- "-"
+  names(gapCodon) <- "---"
+  my_GENETIC_CODE <- c(GENETIC_CODE, gapCodon)
+  
+  ## translate the codons
+  pep <- my_GENETIC_CODE[myCodons]
+  
+  ## check for codons that were not possible to translate, e.g. frameshift codons
+  if (sum(is.na(pep))>0) {
+    cat("\nwarning - there were codons I could not translate. Using this character", unknownCodonTranslatesTo, "\n\n")
+    pep[ which(is.na(pep)) ] <- unknownCodonTranslatesTo
+  }
+  
+  ## prep for output
+  pep <- paste(pep, collapse="")
+  return(pep)
+}
+
+## wrap the getCodons and translateCodons functions together into one:
+translateGappedAln <- function(myAln, unknownCodonTranslatesTo="-") {
+  myCodons <- getCodons(myAln)
+  myAAaln <- AAStringSet(unlist(lapply(myCodons, translateCodons, unknownCodonTranslatesTo=unknownCodonTranslatesTo)))
+  return(myAAaln)
+}
+
+#function to align, trim, and translate, and add sequence to df. Input untrimmed fasta and ref_fasta
+fasta_to_df_gaps <- function(fasta, ref){
+  alignment <- pairwiseAlignment(ref, fasta)
+  aligned_seq <- alignedSubject(alignment) #DNAStringSet with aligned sequence
+  trim_to_roi(type, gene, aligned_seq)
+  trimmed_seq <- trimmed_fasta
+  aligned_seq_aa <- translateGappedAln(trimmed_seq) #custom function to translate aligned sequence with gaps
+  seq_char <- as.character(aligned_seq_aa) #convert translated sequence to character
+  seq_commas <- vapply(strsplit(seq_char, ""), function(x) paste(x, collapse=","), character(1L)) #add commas between aa
+  seq_sep <- unlist(strsplit(seq_commas, ",")) #unlist to add to df
+  seq_name = names(fasta) #name of sequence
+  
+  df <<- df %>%
+    rbind(c(seq_name, seq_sep)) 
+  
+}
+```
+```{r, mutations}
+#Run through each sequence in concatenated file to add base to dataframe
+for(i in 1:length(seqs_fasta)){
+  fasta_to_df_gaps(seqs_fasta[i], ref_fasta)
+}
+
+mut = as.character() #Empty string to hold mutations
+#function to run through columns to check for different aa in sequence vs ref
+find_muts <- function(row){
+  for(i in 2:width(ref_aa)){
+    if(df[1,i] != df[row,i]) {
+      mut <<- (paste0(mut, gene, ":", df[1,i], (i-1), df[row,i], ", "))
+    }
+  }
+}
+
+#Create empty mutations df
+mutations = data.frame(matrix(NA,
+                              nrow = 0,
+                              ncol = 2))
+
+#Fill df with all mutations for each sequence
+for(j in 2:nrow(df)){
+  find_muts(j)
+  if(length(mut) == 0){ #avoid error when no mutations present
+    mut <<- "none"
+  }
+  mutations <<- mutations %>%
+    rbind(c(names(seqs_fasta[(j-1)]), mut))
+  print(paste0(names(seqs_fasta[(j-1)]), ", ", mut)) #print output to console
+  mut = as.character() #Empty string to hold mutations
+}
+
+colnames(mutations) <- c("SampleID", "mutations") #add column names
+
+```
+```{r, flags}
+#empty data frame for antiviral flags
+flag <- data.frame()
+
+#function to find any indicated flag for each type/gene
+flag_func <- function(df){
+  if(type == "H1N1" & gene == "PA"){
+    flag_t <- df %>% 
+      mutate(flu_antiviral = case_when(df$`38` != "I" ~ paste0("PA:I38", df$`38`),
+                                       TRUE ~ "none" ))
+  }
+  if(type == "H1N1" & gene == "NA"){
+    flag_t <- df %>% 
+      mutate(flu_antiviral = case_when(df$`223` != "I" & df$`247` != "S" & df$`275` != "H" 
+                                                            ~ paste0("NA:I223", df$`223`, "NA:S247", df$`247`, "NA:H275"),
+                                       df$`275` != "H" & df$`223` != "I" ~ paste0("NA:I223", df$`223`, "NA:H275", df$`275`),
+                                       df$`275` != "H" & df$`247` != "S" ~ paste0("NA:S247", df$`247`, "NA:H275", df$`275`), 
+                                       df$`223` != "I" & df$`247` != "S" ~ paste0("NA:I223", df$`223`, "NA:S247", df$`247`),
+                                       df$`275` != "H" ~ paste0("NA:H275", df$`275`),
+                                       df$`223` != "I" ~ paste0("NA:I223", df$`223`),
+                                       df$`247` != "S" ~ paste0("NA:S247", df$`247`),
+                                       TRUE ~ "none" ))
+  }
+  if(type == "H1N1" & gene == "M2"){ #not checking regularly - present in nearly all strains
+    flag_t <- df %>% 
+      mutate(flu_antiviral = case_when(df$`31` != "S" ~ paste0("M2:S31", df$`31`),
+                                       TRUE ~ "none" ))
+  }
+  if(type == "H3N2" & gene == "PA"){
+    flag_t <- df %>% 
+      mutate(flu_antiviral = case_when(df$`38` != "I" ~ paste0("PA:I38", df$`38`),
+                                       TRUE ~ "none" ))
+  }
+  if(type == "H3N2" & gene == "NA"){
+    flag_t <- df %>% 
+      mutate(flu_antiviral = case_when(df$`119` != "E" & df$`292` != "R" ~ paste0("NA:E119", df$`119`, ", NA:R292", df$`292`),
+                                       df$`119` != "E" ~ paste0("NA:E119", df$`119`),
+                                       df$`292` != "R" ~ paste0("NA:R292", df$`292`),
+                                       TRUE ~ "none" ))
+  }
+  if(type == "H3N2" & gene == "M2"){ #not checking regularly - present in nearly all strains
+    flag_t <- df %>% 
+      mutate(flu_antiviral = case_when(df$`31` != "S" ~ paste0("M2:S31", df$`31`),
+                                       TRUE ~ "none" ))
+  }
+  if(type == "B" & gene == "PA"){ 
+    flag_t <- df %>% 
+      mutate(flu_antiviral = case_when(df$`38` != "I" & df$`199` != "G" ~ paste0("PA:I38", df$`28`, ", PA:G199", df$`199`),
+                                       df$`38` != "I" ~ paste0("NA:H274", df$`274`),
+                                       df$`199` != "G" ~ paste0("NA:G199", df$`199`),
+                                       TRUE ~ "none" ))
+  }
+  if(type == "B" & gene == "NA"){ #more than 2 mutations identified, list all locations of interest
+    flag_t <- df %>% 
+      mutate(flu_antiviral = case_when(df$`152` != "R" | df$`292` != "R" | df$`371` != "R" | df$`119` != "E" ~ 
+                                         paste0("NA:R152", df$`152`, ", NA:R292", df$`292`, ", NA:R371", df$`371`, ", NA:E119", df$`119`),
+                                       TRUE ~ "none" ))
+  }
+  if(type == "B" & gene == "M2"){ #none to flag
+    flag_t <- df %>% 
+      mutate(flu_antiviral = case_when(
+                                       TRUE ~ "none" ))
+  }
+  flag_t <- flag_t %>%
+    select(name, flu_antiviral)
+  
+  flag <<- flag %>%
+    rbind(flag_t)
+}
+
+#run through each row of df to find antiviral flags
+for(i in 1:nrow(df)){
+  flag_func(df[i,])
+}
+
+flag <- flag %>%
+  rename(SampleID = name)
+
+output <- mutations %>%
+  left_join(flag, by = join_by(SampleID))
+
+
+###SAVE FILE##########
+write.csv(output, "/Users/vhogan/Documents/Flu/20250313_concat_NA_B.csv", row.names = FALSE, na = "")
+
+```
+
+
+

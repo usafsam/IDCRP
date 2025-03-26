@@ -1,0 +1,96 @@
+---
+title: "Concatenate InfA consensus fastas"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r, warning=FALSE}
+##Edit 13Feb25 - accounts for segment names rather than lengths to separate, separates H1/H3 and N1/N2
+
+library(Biostrings)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(stringr)
+```
+```{r}
+fastas <- list.files(path = "/Users/vhogan/Documents/Flu/ARIA_fastas/consensus_fastas/250313", pattern = "*.fasta", full.names = TRUE) 
+
+concat_HA_H1 <- DNAStringSet()
+concat_HA_H3 <- DNAStringSet()
+concat_NA_N1 <- DNAStringSet()
+concat_NA_N2 <- DNAStringSet()
+concat_PA <- DNAStringSet()
+  
+for(i in 1:length(fastas)){
+  
+  sample <- readDNAStringSet(fastas[i])
+  
+  for(j in 1:length(sample)){
+      if (grepl("HA_H1", (names(sample[j])))){
+        concat_HA_H1 <- c(concat_HA_H1, sample[j])
+      }
+      if (grepl("HA_H3", (names(sample[j])))){
+          concat_HA_H3 <- c(concat_HA_H3, sample[j])
+        } 
+      if (grepl("NA_N1", (names(sample[j])))){
+        concat_NA_N1 <- c(concat_NA_N1, sample[j])
+      } 
+      if (grepl("NA_N2", (names(sample[j])))){
+        concat_NA_N2 <- c(concat_NA_N2, sample[j])
+      } 
+      if (grepl("PA", (names(sample[j])))){
+      concat_PA <- c(concat_PA, sample[j])
+      }
+  }
+}
+
+
+```
+```{r}
+#no_PA <- c("A10-10640-5-PCR_infA_S2-A_PA") #PA fail - manually list PA failure
+
+H1N1 <- c(names(concat_HA_H1)) %>%
+  str_replace("HA_H1", "PA")
+
+H1N1 <- H1N1[H1N1 %in% names(concat_PA)] #remove PA fail (otherwise throws error because name doesn't exist)
+
+concat_PA_H1N1 <- concat_PA[H1N1]
+
+H3N2 <- c(names(concat_HA_H3)) %>%
+  str_replace("HA_H3", "PA") 
+
+H3N2 <- H3N2[H3N2 %in% names(concat_PA)] #remove PA fail (otherwise throws error because name doesn't exist)
+
+concat_PA_H3N2 <- concat_PA[H3N2]
+```
+
+```{r}
+for(i in 1:length(fastas)){
+  
+  sample <- readDNAStringSet(fastas[i])
+  
+  #check for samples with failed segments
+  if (length(sample) != 8){
+    print('fewer than 8 segments detected')
+    print(sample) 
+  }
+}
+```
+```{r}
+writeXStringSet(concat_HA_H1, "concat_HA_H1.fa")
+writeXStringSet(concat_HA_H3, "concat_HA_H3.fa")
+writeXStringSet(concat_NA_N1, "concat_NA_N1.fa")
+writeXStringSet(concat_NA_N2, "concat_NA_N2.fa")
+writeXStringSet(concat_PA_H1N1, "concat_PA_H1N1.fa")
+writeXStringSet(concat_PA_H3N2, "concat_PA_H3N2.fa")
+```
+
+
+
+
+
+
+
+
