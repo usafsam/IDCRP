@@ -1,0 +1,333 @@
+---
+title: "USNA Wastewater Sequencing"
+author: "Vivian Hogan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(readxl)
+library(tidyverse)
+library(cowplot)
+library(plotly)
+
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+```{r, upload}
+#Upload twist output from WW_Twist_list_from_kraken_10Jan25.rmd
+#Add _USNA to control names (of text) before running Twist list script, or only run on samples of interest and remove "filter(grepl("USNA", SampeID))" to ensure controls are included
+
+#Rank includes S, S1, and S2 from twist_list - (check for double counting))
+
+Twist_output <- read_xlsx("/Users/vhogan/Documents/WW/Data/WW_twist_output_29Jan25.xlsx")
+
+#Select USNA samples and fields of interest, simplify SampleID to date
+WW_twist <- Twist_output %>%
+  filter(grepl("USNA", SampleID)) %>%
+  select(SampleID, Name, NCBI_ID, Num_fragments_covered) %>% #select only needed columns
+  mutate(NCBI_ID = as.character(NCBI_ID)) %>% #read as character to avoid any calculations
+  mutate(SampleID = ifelse(startsWith(SampleID, 'USNA'), str_split_i(SampleID,'_', i =3), str_split_i(SampleID, '_', 1)))
+
+#Upload list of Twist targets in RPP from ARIA
+ARIA_viruses <- read_xlsx("/Users/vhogan/Documents/WW/Data/ARIA_resp_viruses.xlsx") %>%
+  mutate(NCBI_ID = as.character(NCBI_ID))
+
+#Upload list of GI viruses from Frontier paper (Singh et al 2024)
+GI_viruses <- read_xlsx("/Users/vhogan/Documents/WW/Data/GI_viruses.xlsx") %>%
+  mutate(NCBI_ID = as.character(NCBI_ID))
+
+#Upload weekly_counts converted week manually in excel to week_starting column (e.g. week 14, 2024 is week starting April 1 2024)
+weekly_counts <- read_xlsx("/Users/vhogan/Documents/WW/Data/Weekly_counts_Apr_Nov24.xlsx") 
+
+#upload library quant files (from sequencing)
+lib_files <-list.files(path = "/Users/vhogan/Documents/WW/Quants", pattern = "*.xlsx", full.names = T) %>%
+  lapply(read_excel, sheet = 'Library Quant (C)', skip=40) %>%
+  bind_rows() %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(lib_quant = 5) %>%
+  filter(SampleID!=0) %>%
+  select(SampleID, lib_quant) %>%
+  mutate(SampleID = ifelse(startsWith(SampleID, 'USNA'), str_split_i(SampleID,'_', i =3), str_split_i(SampleID, '_', 1)))
+
+#upload amp quant files (from sequencing)
+amp_files <- list.files(path = "/Users/vhogan/Documents/WW/Quants", pattern = "*.xlsx", full.names = T) %>%
+  lapply(read_excel, sheet = 4, skip=39) %>%
+  bind_rows() %>%
+  rename(SampleID = `Sample ID`) %>%
+  rename(amp_quant = 5) %>%
+  filter(SampleID!=0) %>%
+  select(SampleID, amp_quant) %>%
+  mutate(SampleID = ifelse(startsWith(SampleID, 'USNA'), str_split_i(SampleID,'_', i =3), str_split_i(SampleID, '_', 1)))
+
+sc2_cts <- read_xlsx("/Users/vhogan/Documents/WW/Data/DCPHA_USNA_editedVH.xlsx", sheet = "USNA_Ct") 
+
+ww_sc2_variants <- read_xlsx("/Users/vhogan/Documents/WW/Data/DCPHA_USNA_editedVH.xlsx", sheet = "USNA_variants")
+
+ARIA_sc2_variants <- read_xlsx("/Users/vhogan/Documents/WW/Data/ARIA_sc2_variants.xlsx") 
+
+```
+
+```{r}
+#pivot and sum reads by column
+reads_by_name <- WW_twist %>%
+  pivot_wider(
+    names_from = SampleID,
+    values_from = Num_fragments_covered) 
+
+#create single row df with total reads
+totals <- reads_by_name %>%
+  summarise(across(where(is.numeric), ~ sum(.x, na.rm = TRUE))) %>%
+  mutate_all(as.numeric) 
+
+#divide reads df by totals - should direcly compare to Agans' excel workbook
+percent <- reads_by_name %>%
+  rowwise() %>% 
+  mutate(c_across(3:ncol(reads_by_name)) / totals, .keep = "unused") %>% #calculate percent rowwise for each column starting at column 3
+  ungroup()
+
+#long version for plotting bar chart
+percent_long <- percent %>%
+  pivot_longer(
+    cols = 3:ncol(percent),
+    names_to = 'SampleID',
+    values_to = 'Percent'
+  ) %>%
+  mutate(Percent = Percent *100) %>%
+  filter(str_detect(SampleID, "^2")) %>% #remove controls for plotting 
+  mutate(date = as.Date(SampleID, "%y%b%d")) %>%
+  mutate(week = strftime(date, "%V"))
+```
+### <span style="color: blue;">Major species detected in wastewater that are present in Twist Viral Pathogen Panel</span>
+##### <span style="color: grey;">Species were singled out that are present in Twist. To calculate percent abundance, number of reads was divided by total number of Twist pathogen reads by sample/date. This chart includes all species with >5% abundance in each sample.</span>
+```{r, fig.width=10,fig.height=6}
+#filter for Percent > 5
+percent_5 <- percent_long %>%
+  filter(Percent >5)
+
+#Stacked bar chart with Percent > 5
+plotly_5 <- plot_ly(percent_5, x = ~date, y = ~Percent, color = ~Name, type = 'bar') %>% 
+  layout(xaxis = list(title = 'Date (week)', 
+                      tickformat= "%U"),
+         yaxis = list(title = 'Percent Abundance'),
+         legend = list(orientation = 'h', y = -0.2), 
+         margin = list(r = 50),
+         barmode = 'stack')
+
+plotly_5
+```
+### <span style="color: blue;">Species detected in wastewater that are present in Twist Viral Pathogen Panel and tested for in Respiratory Pathogen Panel (RPP) used in ARIA</span>
+##### <span style="color: grey;">Species were singled out that are present in Twist and in the RPP used in ARIA. This chart includes all species with >0.1% abundance in each sample.</span>
+```{r, fig.width=10,fig.height=6}
+#Filter for viruses in ARIA and Percent >0.1
+
+ARIA_resp_reads <- percent_long %>%
+  filter(NCBI_ID %in% ARIA_viruses$NCBI_ID) %>%
+  filter(Percent > 0.1)
+
+#Rearrange to match ARIA_resp_reads df
+weekly_counts_new <-weekly_counts %>%
+  select(week_starting, n_encounters) %>%
+  rename(date = week_starting) %>%
+  mutate(date = as.Date(date) +7) %>%
+  mutate(Name = 'Weekly Count',
+         NCBI_ID = NA,
+         SampleID = NA, 
+         Percent = NA)
+
+#Bind rows with weekly counts to ARIA_resp_reads to plot together
+ARIA_resp <- ARIA_resp_reads %>%
+  mutate(n_episodes = NA) %>%
+  bind_rows(weekly_counts_new)
+
+
+#ARIA viruses stacked barchart (with percent >0.1), add trace with weekly counts as scatter
+plotly_resp <- plot_ly(ARIA_resp, x = ~date, y = ~Percent, color = ~Name, type = 'bar') %>% 
+  
+  add_trace(x = ~date, y = ~n_encounters, type = 'scatter', mode = 'lines', yaxis = "y2", marker = list(
+      color = 'rgb(17, 157, 255)')) %>%
+  
+  layout(xaxis = list(title = 'Date (week)', tickformat= "%U"),
+         yaxis = list(title = 'Percent Abundance'),
+         yaxis2 = list(title = "Weekly Encounters",
+                       overlaying = "y", side = "right", 
+                       showgrid = FALSE, range = list(0,250)),
+         legend = list(orientation = 'h', y = -0.2), 
+         margin = list(r = 50),
+         barmode = 'stack')
+
+plotly_resp
+```
+### <span style="color: blue;">Species detected in wastewater that are present in Twist Viral Pathogen Panel and common GI viruses of concern</span>
+##### <span style="color: grey;">Species were singled out that are present in Twist and GI viruses of concern. These include Adenovirus, Enterovirus, Rotavirus, Sapovirus, and Norovirus (Singh et al 2024). This chart includes all species with >0.1% abundance in each sample.</span>
+
+```{r, fig.width=10,fig.height=6}
+##Filter for GI viruses and Percent >0.1
+GI_reads <- percent_long %>%
+  filter(NCBI_ID %in% GI_viruses$NCBI_ID) %>%
+  filter(Percent > 0.1)
+
+#ARIA viruses stacked barchart (with percent >0.1)
+plotly_GI <- plot_ly(GI_reads, x = ~date, y = ~Percent, color = ~Name, type = 'bar') %>% 
+  
+  layout(xaxis = list(title = 'Date (week)', tickformat= "%U"),
+         yaxis = list(title = 'Percent Abundance'),
+         legend = list(orientation = 'h', y = -0.2), 
+         margin = list(r = 50),
+         barmode = 'stack')
+
+plotly_GI
+```
+```{r}
+#Looking at reads instead of percent
+
+#Pivot to long for barchart
+reads_long <- reads_by_name %>%
+  pivot_longer(
+    cols = 3:ncol(percent),
+    names_to = 'SampleID',
+    values_to = 'Reads'
+  ) %>%
+  filter(str_detect(SampleID, "^2")) %>% #remove controls for plotting 
+  mutate(date = as.Date(SampleID, "%y%b%d"))
+```
+### <span style="color: blue;">Total reads counts associated with Twist Viral Pathogen Panel</span>
+
+```{r, fig.width=10,fig.height=6}
+#Stacked barchart with reads (only including pathogen on Twist Viral panel) - Rotavirus A basically takes over scale
+plotly_reads <- plot_ly(reads_long, x = ~date, y = ~Reads, color = ~Name, type = 'bar') %>% 
+  layout(xaxis = list(title = 'Date (week)', tickformat= "%U"),
+         yaxis = list(title = 'Reads'),
+         legend = list(orientation = 'h', y = -0.2), 
+         margin = list(r = 50),
+         barmode = 'stack')
+
+plotly_reads
+```
+
+```{r}
+#Need to look at unseparated data to see reads
+
+#define column names of kraken reports
+colNames <- c('Percent', 'Num_fragments_covered', 'Num_fragments_assigned', 'Rank', 'NCBI_ID', 'Name') #define col names for output df
+
+#upload all kraken reports in a folder
+all_txt_files <-list.files('/Users/vhogan/Documents/WW/kraken_output/USNA/', pattern = "*.txt", full.names = T) %>% #list all txt files in folder (report files)
+  setNames(nm = .) %>%                      #add file location as column
+  map_dfr(~read_delim(.x, 
+                      delim = "\t",         #make dataframe from reading files
+                      show_col_types = FALSE,
+                      col_names = colNames), .id = "SampleID") %>%
+  mutate(Percent = as.numeric(Percent)) %>%
+  mutate(SampleID = str_remove(SampleID, "_report.txt$")) %>% #simplify file names
+  mutate(SampleID = str_remove(SampleID, ".txt")) %>% 
+  mutate(SampleID = str_remove(SampleID, "/Users/vhogan/Documents/WW/kraken_output/USNA/"))      #remove file path from sample IDs
+
+#Filter for USNA samples
+WW_all <- all_txt_files %>%
+  filter(grepl("USNA", SampleID)) %>%
+  select(SampleID, Name, NCBI_ID, Num_fragments_covered, Num_fragments_assigned) %>% #select only needed columns
+  mutate(NCBI_ID = as.character(NCBI_ID)) %>% #read as character to avoid any calculations
+  mutate(SampleID = ifelse(startsWith(SampleID, 'USNA'), str_split_i(SampleID,'_', i =3), str_split_i(SampleID, '_', 1)))
+
+#Filter for root (total reads) - to include non-Twist pathogens
+#Join uant data from sequencing
+root_all <- WW_all %>%
+  filter(Name == 'root') %>%
+  mutate(date = as.Date(SampleID, "%y%b%d")) %>%
+  left_join(lib_files, by = join_by('SampleID')) %>%
+  left_join(amp_files, by = join_by('SampleID')) %>%
+  filter(str_detect(SampleID, '^2'))
+  
+```
+
+### <span style="color: blue;">Total reads (Twist and non-Twist)</span>
+```{r, fig.width=10,fig.height=6}
+
+plotly_reads_root <- plot_ly(root_all, x = ~date, y = ~Num_fragments_covered, type = 'bar') %>% 
+  
+  layout(xaxis = list(title = 'Date (week)', tickformat= "%U"),
+         yaxis = list(title = 'Reads'),
+         margin = list(r = 50))
+
+plotly_reads_root
+```
+
+### <span style="color: blue;">Library quant data across samples/dates</span>
+```{r, fig.width=10,fig.height=6}
+#Check if amplicon reads relates to total number of sequencing reads
+
+plotly_lib_reads <- plot_ly(root_all, x = ~date, y = ~lib_quant, type = 'scatter') %>% 
+
+  layout(xaxis = list(title = 'Date (week)', tickformat= "%U"),
+         yaxis = list(title = 'Library Quant (ng/uL)'),
+         margin = list(r = 50))
+
+plotly_lib_reads
+```
+### <span style="color: blue;">Amplicon quant data across samples/dates</span>
+```{r, fig.width=10,fig.height=6}
+#Check if amplicon reads relates to total number of sequencing reads
+
+plotly_amp_reads <- plot_ly(root_all, x = ~date, y = ~amp_quant, type = 'scatter') %>% 
+
+  layout(xaxis = list(title = 'Date (week)', tickformat= "%U"),
+         yaxis = list(title = 'Amplicon Quant (ng/uL)'),
+         margin = list(r = 50))
+
+plotly_amp_reads
+```
+### <span style="color: blue;">Number of SARS-CoV-2 reads in wastewater sequencing compared to N1/N2 Cts from Aberdeen data</span>
+```{r}
+sc2_reads <- reads_long %>%
+  filter(NCBI_ID == '2697049') %>%
+  mutate(Reads = ifelse(is.na(Reads), 0, Reads))
+  
+
+sc2_reads_cts <- sc2_reads %>%
+  left_join(sc2_cts, by = join_by(SampleID)) %>%
+  arrange(as.Date(date.x, "%y-%m-%d"))
+
+plotly_sc2_reads <- plot_ly(sc2_reads_cts, x = ~date.x, y = ~Reads, type = 'scatter', mode = 'marker', name = 'SC2 reads') %>% 
+  
+  add_trace(x = ~date.x, y = ~N1, type = 'scatter', mode = 'marker', name = 'N1 Ct') %>%
+  add_trace(x = ~date.x, y = ~N2, type = 'scatter', mode = 'marker', name = 'N2 Ct') %>%
+  
+  layout(xaxis = list(title = 'Date (week)', tickformat= "%U"),
+         yaxis = list(title = 'SC2 Reads'),
+         margin = list(r = 50))
+
+plotly_sc2_reads
+```
+
+### <span style="color: blue;">Comparison of SARS-CoV-2 variants between ARIA and USNA wastewater</span>
+##### <span style="color: grey;">USNA wastewater from August 27 collection date was sequenced for SC2 with the abundance of variants shown below. This is compared to SC2 variants identified in ARIA samples collected from August 27 - September 17</span>
+```{r, variants}
+ww_sc2_variants <- ww_sc2_variants %>%
+  pivot_longer(
+    cols = 3:ncol(ww_sc2_variants),
+    names_to = 'Variant',
+    values_to = 'Percent') %>%
+  select(SampleID, Variant, Percent)
+
+ARIA_sc2_variants <- ARIA_sc2_variants %>%
+    pivot_longer(
+    cols = 3:ncol(ARIA_sc2_variants),
+    names_to = 'Variant',
+    values_to = 'Percent') %>%
+  select(SampleID, Variant, Percent)
+
+sc2_variants <- ww_sc2_variants %>%
+  bind_rows(ARIA_sc2_variants)
+
+#Stacked bar chart with Percent > 5
+plotly_variants <- plot_ly(sc2_variants, x = ~SampleID, y = ~Percent, color = ~Variant, type = 'bar') %>% 
+  layout(
+         yaxis = list(title = 'Percent Abundance'),
+         legend = list(orientation = 'h', y = -0.2), 
+         margin = list(r = 50),
+         barmode = 'stack')
+
+plotly_variants
+```
+
